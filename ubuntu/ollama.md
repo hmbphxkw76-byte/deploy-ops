@@ -4,6 +4,8 @@
 
 本文件整合了原有的 Ollama 服务配置内容，便于在 Ubuntu 系统中快速部署和维护服务。
 
+## 下载和解压 sudo tar -I zstd -xvf ollama-linux-amd64.tar.zst -C /usr
+
 ## 1. 服务配置内容
 
 ```ini
