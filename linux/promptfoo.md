@@ -71,7 +71,49 @@ npx promptfoo@latest init
 | 合并 generate + eval 两步 | `promptfoo redteam run --config promptfoo-redteam-config.yaml` |
 | 查看结果报告 | `promptfoo redteam report` |
 
-## 6. Agent 执行注意事项
+## 6. Web 结果查看（promptfoo view）
+
+### 6.1 本机直接查看（SSH 隧道，推荐）
+
+`promptfoo view` 默认只监听远程主机的 localhost，需通过 SSH 隧道映射到本机：
+
+```bash
+# 1) 服务器上启动查看服务（-n 不自动开浏览器；默认端口 15500；nohup 使其断开 SSH 后仍存活）
+ssh root@<server> "nohup bash -lc 'promptfoo view -n' >/tmp/pf-view.log 2>&1 &"
+
+# 2) 验证服务已启动（应输出 HTTP:200）
+ssh root@<server> "curl -s -o /dev/null -w 'HTTP:%{http_code}\n' http://localhost:15500"
+
+# 3) 本机建立 SSH 隧道（Windows PowerShell 下保持窗口开启即可；-N 不执行远程命令）
+ssh -N -L 15500:localhost:15500 root@<server>
+
+# 4) 本机浏览器访问
+#    http://localhost:15500
+# 本机连通性验证：curl.exe -s -o NUL -w "HTTP:%{http_code}" http://localhost:15500
+```
+
+注意：
+- PowerShell 中 `curl` 是 `Invoke-WebRequest` 别名，验证隧道需用 `curl.exe`。
+- 隧道依赖本机 SSH 进程，断开后重跑第 3 步即可。
+- 服务器重启后需重新执行第 1 步。
+
+### 6.2 局域网直接访问（可选）
+
+如希望 `http://<server>:15500` 直接访问（不走隧道），在服务器上用 socat 把 localhost:15500 暴露到 0.0.0.0：
+
+```bash
+# 安装 socat 并常驻转发
+apt install -y socat
+nohup socat TCP-LISTEN:15501,fork,reuseaddr TCP:127.0.0.1:15500 >/tmp/socat-pf.log 2>&1 &
+```
+
+> 直接暴露会将红队评估结果开放给整个局域网，执行前向用户确认风险。
+
+### 6.3 新结果刷新
+
+每次 `promptfoo eval` 跑完后，浏览器刷新页面即可看到新评估；`--filter-description <regex>` 可按描述过滤评估。
+
+## 7. Agent 执行注意事项
 
 - 全局安装失败时，先检查网络与镜像源（`npm ping`），不要盲目重试。
 - `redteam run` / `redteam eval` 可能调用外部模型 API，执行前向用户确认目标系统与所用的 API Key 已配置。

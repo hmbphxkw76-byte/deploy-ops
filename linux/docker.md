@@ -10,6 +10,7 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装�
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `TARGET_OS` | `ubuntu` | 目标环境：`ubuntu`（走第 1~2 章）或 `windows`（走第 3 章） |
+| `DOCKER_APT_MIRROR` | `https://download.docker.com/linux/ubuntu` | Docker apt 仓库地址；国内网络对官方源报 `Could not handshake` 时改用 `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`（GPG key 仍可用官方地址下载） |
 | `REGISTRY_MIRRORS` | `https://docker.xuanyuan.me`、`https://docker.m.daocloud.io`、`https://docker.imgdb.de` | Ubuntu 侧镜像加速地址列表 |
 | `DOCKER_MIRRORS_WIN` | `https://docker.xuanyuan.me`、`https://docker.1ms.run`、`https://docker.m.daocloud.io` | Windows Docker Desktop 镜像加速地址列表 |
 | `RUN_CLEANUP` | `false` | 是否执行第 4 章清理；默认不执行，需用户显式确认 |
@@ -63,9 +64,10 @@ sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyring
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 
 # 添加 apt 仓库（自动适配当前发行版代号与架构）
+# 国内网络对官方源报 "Could not handshake" 时，先 export DOCKER_APT_MIRROR=https://mirrors.aliyun.com/docker-ce/linux/ubuntu
 sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
 Types: deb
-URIs: https://download.docker.com/linux/ubuntu
+URIs: ${DOCKER_APT_MIRROR:-https://download.docker.com/linux/ubuntu}
 Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 Components: stable
 Architectures: $(dpkg --print-architecture)
@@ -416,6 +418,9 @@ docker system prune -a
 ## 6. Agent 执行注意事项
 
 - Ubuntu 侧命令需要 sudo；Agent 应使用非交互方式执行 sudo 命令（如终端已授权），避免卡在密码输入。
+- **`download.docker.com` TLS 握手失败**（国内网络常见，apt update 报 `Could not handshake`）：将 `/etc/apt/sources.list.d/docker.sources` 中的 `https://download.docker.com/linux/ubuntu` 替换为阿里云镜像 `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`，GPG key 可继续沿用官方地址（curl 下载通常可用）。
+- **dpkg 锁被 `unattended-upgr` 占用**（`E: Could not get lock /var/lib/dpkg/lock-frontend`）：新装 Ubuntu 22.04 首次启动会自动跑安全更新。等待其自然结束；若长时间无进展（进程 CPU 时间持续增长、网络不佳）可 `systemctl stop unattended-upgrades`，必要时 kill 进程；该服务被 apt-daily 触发会自动重启抢锁，需一并 `systemctl disable unattended-upgrades apt-daily.timer apt-daily-upgrade.timer` 后再继续安装。
+- **安装即自启**：`apt install docker-ce` 会自动启动 docker 服务，若 daemon.json 在安装之后才写入，必须 `systemctl restart docker` 镜像加速才生效（`docker info | grep -A 4 "Registry Mirrors"` 验证）。
 - 修改 daemon.json 前必须先读取现有内容，合并配置而不是覆盖。
 - 服务操作（restart/enable）失败时，用 `journalctl -u docker --no-pager -n 50` 查看日志并报告原因，不要盲目重试。
 - 每完成一章，向用户汇报当前状态与下一步计划。
