@@ -1,60 +1,6 @@
-# OSAI AI-300 技能覆盖缺口与补齐决策
+## 1. 靶机总表
 
-## 1. 文档说明
-
-- 本文档为 OffSec OSAI / AI-300 备考工具链选型的**精简留存版**（调研 2026-11-05；许可已于 2026-11-07 经 GitHub API 全量复核），仅保留四类内容：考试画像与考纲锚点、8 攻击面主决策表、靶机总表、GitHub 来源索引。调研期间未改动任何 skill 源文件（评估对象为 `oasi-harness/arsenal/skills` 20 个 SKILL.md，只读）。全文各章节的逐条证据等级标注见 7.3。
-- 资质标记：**◎ 官方/机构级** ｜ **◐ 成熟安全团队** ｜ **○ 社区/个人（须审计后引入）**。
-
----
-
-## 2. 考试画像与考纲锚点
-
-### 2.1 考试画像（一手来源：OffSec）
-
-- 24 小时连续实操、OffSec 员工经私有 VPN 现场监考的实战入侵，非选择题。
-- 攻陷真实感的 **AI 企业级环境**：AI agents、数据管线、模型基础设施、GenAI 平台、ML 管线、AI 部署环境。
-- 覆盖范围包含 Attacking LLMs、多智能体系统、RAG 管线、Embeddings/向量库、AI 基础设施与编排框架、AI 云安全、GenAI/深度学习/自主 AI 应用，以及**传统渗透测试方法论与 AI 专属攻击技术的融合**。
-- 前置建议 OSCP 或同等实操经验；纯实战入侵，靠达成 objectives + 报告质量评分。
-- 考生一手复盘补充：两条独立攻击链、AI 与传统向量混合、100 分制 75 分通过、24h 实操后另有独立 24h 报告窗口。
-
-### 2.2 考纲锚点：A2A 与多智能体是明确考点
-
-公开可查的 AI-300 培训大纲（Ambient IT 课程附录）明确列出除主表 8 面外还应掌握：
-
-- 多智能体架构与**分布式协调机制**；
-- **A2A 协议基础：消息结构、传输、认证模型**；
-- 对 agent 间流量实施 **impersonation（仿冒）/ relay（中继）/ replay（重放）攻击**；
-- 利用 **validation / schema / serialization** 缺陷；
-- 在**保持状态连续性、不中断流程**的前提下篡改工作流；
-- RAG 链（ingestion → retrieval → generation）的分段利用。
-
-A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-agent` 时应一并纳入 `A2ASecBench` 与 `a2a-scanner` 方法论。考纲来源见 6.2「官方政策与考纲（非 GitHub）」。
-
----
-
-## 3. 八大攻击面 × 推荐工具主决策表
-
-| # | 攻击面 | 当前评级 | 最该补 | 攻击效果最佳的开源资产（形态） | GitHub 来源 | 资质 / 许可 | 决策 |
-|:--:|---|:---:|:---:|---|---|:---:|---|
-| 1 | **LLM 应用** | A 4 强 | **P3 不动** | `PyRIT`（多轮攻击框架：Crescendo / RedTeamingOrchestrator / Pair / TAP + scorer + memory）；`bb-huge → curated/ai-redteam/SKILL.md`（OWASP LLM Top10 + AITG v1 + MCP Top10，`pentest.log` 调用链，要求 reproducible PoCs） | `microsoft/PyRIT`<br>`ShulkwiSEC/bb-huge` | ◎ MIT<br>○ MIT（2026-11-07 实测） | **保留**现有 `prompt-injection` / `prompt-hacking` / `llm-jailbreaking` / `safety-filter-bypass` / `prompt-extraction` 等 10 个；仅借 `bb-huge` 审计链机制供 P2 复用，不加新攻击 skill |
-| 2 | **AI agents** | B 3 良（单 agent 工具面已验证） | **P1 扩面** | `AgentDojo`（97 任务 / 629 注入用例，输出 Benign Utility + ASR 可量化指标）；`Inspect AI`（agent 沙箱 / `.eval` 结构化、版本化、带 provenance 的日志） | `ethz-spylab/agentdojo`<br>`UKGovernmentBEIS/inspect_ai` ※ | ◎ ETH Zurich SPY Lab / **MIT**<br>◎ UK AI Security Institute / **MIT** | **保留** `agentic-tool-abuse` 为主干；AgentDojo 作验证靶场；补 `hypnguyen1209/offensive-claude → ai-agent-redteam`（零点击注入、持久内存中毒、excessive agency） |
-| 3 | **multi-agent** | B 残留缺口 ≈ 1 弱 | **P1** | `OWASP FinBot CTF`（"The Juice Shop for Agentic AI"，真实 agent 漏洞 + 反暴力注入计分）；`trustshell → rt9-multi-agent`（**agent 间指令注入、跨 agent 跳板提权、orchestrator/sub-agent handoff 信任洗白**，零依赖 SKILL.md） | `GenAI-Security-Project/finbot-ctf`<br>`William2333ZZ/trustshell` | ◎ OWASP GenAI ASI / OWASP 对齐许可<br>○ MIT（2026-11-07 实测） | **移植 `rt9-multi-agent`**；FinBot 仅考前训练。注：`agiresearch/ASB` 主要面向**单**智能体，不能替代此项 |
-| 4 | **RAG** | C 3 良 | **P3 维持** | `PoisonedRAG`（USENIX Security 2025 官方代码，5 篇投毒文档达 97% 劫持率）；`hunt-rag-vector`（跨租户向量库 IDOR、持久化语料投毒、检索劫持） | `sleeepeer/PoisonedRAG`<br>`elementalsouls/Claude-BugHunter` | ◎ USENIX Sec'25 官方代码 / **MIT**（2026-11-07 实测）<br>○ MIT（Claude-BugHunter） | **保留** `rag-exploitation`；PoisonedRAG 仅本地验证；`hunt-rag-vector` 与第 5 面一并移植 |
-| 5 | **embeddings / 向量库** | D 2 中（0 专职 skill） | **P1** | `vec2text`（"Text Embeddings Reveal (Almost) As Much As Text" 官方实现，embedding inversion 唯一可跑出结果的开源库）；`assessing-vector-and-embedding-weaknesses`（OWASP LLM08:2025，成员推断 / 租户隔离 / KB 投毒，可选装 vec2text，明确禁止写生产语料） | `vec2text/vec2text`<br>`mukul975/Anthropic-Cybersecurity-Skills` | ◎ 论文官方实现 / 自定义 LICENSE（GitHub NOASSERTION）<br>○ **Apache-2.0**（**非 Anthropic 官方**） | **移植** `hunt-rag-vector` + `assessing-...`；`vec2text` 仅训练（重依赖） |
-| 6 | **MCP / tool surfaces** | B 3 良（已 live 验证） | **P1 / P2** | `mcp-scan`（Tool Poisoning / Rug Pull / cross-server shadowing 的**原始披露方** Invariant Labs，静态+运行时扫描，公开过 WhatsApp 数据外泄实战链）；`OWASP MCP Top 10` 标准 | `invariantlabs-ai/mcp-scan`（Invariant 已并入 Snyk，现址 `snyk/agent-scan`）<br>`owasp.org/www-project-mcp-top-10` | ◎ Invariant Labs / Snyk / **Apache-2.0**<br>◎ OWASP 官方标准 | **保留** `agentic-tool-abuse`（覆盖 MCP01/02/03/06/07）为主干；`mcp-scan` 仅训练；补 `auditing-mcp-servers-for-tool-poisoning`（映射 AML.T0010 / T0051.001 / T0053） |
-| 7 | **AI/ML 供应链** | 未单列，实际 ≈ 1 弱（散落 `data-poisoning` 与 `infrastructure-security` 的 LLM03） | **P0** | `modelscan`（pickle / SavedModel / H5 / ONNX 序列化攻击检测，Hugging Face 官方安全合作伙伴）；`atlas-data`（16 tactics / 221 techniques / 77 case studies，含 AML.T0010 ML Supply Chain Compromise）；`wgpsec` 的 MLflow 无认证 → **模型投毒 + RCE** | `protectai/modelscan`<br>`mitre-atlas/atlas-data`<br>`wgpsec/AboutSecurity` | ◎ Protect AI / **Apache-2.0**<br>◎ MITRE / 自定义 LICENSE（NOASSERTION）<br>◐ 无 LICENSE 文件（默认版权保留） | **移植** wgpsec 供应链方法论；ModelScan / ATLAS 作方法论锚点与验证工具；补 `comeonoliver/skillshub → SKILL: AI Pentest`（模型注册表 / 签名策略 / HuggingFace 后门数据集 / 云导出路径） |
-| 8 | **AI 基础设施（含云）** | E 2 中偏弱 + F 1 弱 | **P0** | `wgpsec/AboutSecurity → ai-infrastructure-attack`（Phase 0 端口表：Jupyter 8888 / MLflow 5000 / Ray 8265 / Kubeflow 8080 / Gradio 7860 / Streamlit 8501 / Ollama 11434 / vLLM，标注默认认证缺失 → 直接 RCE）；`cloud-iam-audit` / `aws-iam-privesc`（46 个 AWS 服务 PassRole、AssumeRole 链、NotAction） / `gcp-pentesting` / `serverless-attack` / K8s 逃逸链（Cloud 分类 72 个） | `wgpsec/AboutSecurity` | ◐ WgpSec 狼组 ★1.8k / **无 LICENSE 文件**（代码公开，默认版权保留，训练参考无碍） | **最高优先移植**：唯一「进攻型 + 纯 markdown + 零依赖 + 可按 `--skill` 粒度摘取 + 与 harness 同为 SKILL.md 格式」的组合，一个来源补齐 E / F 两个最弱评级 |
-| 横切 | **证据链 / 验证成熟度** | 2/20 已验证，18 个 `last_validated: null` | **P2** | `Inspect AI`（`.eval` 是结构化、版本化、带 provenance 的计算实验记录）；`promptfoo`（`redteam.yaml` 固定用例 + `redteam report` 逐用例原始输入/输出/上下文）；`bb-huge`（`session(action="set_skill")` 将 `SKILL_CHAIN` 写入 `pentest.log`） | `UKGovernmentBEIS/inspect_ai`<br>`promptfoo/promptfoo`<br>`ShulkwiSEC/bb-huge` | ◎ **MIT** / ◎ **MIT** / ○ | **套用契约**：把本地 `prompt-extraction` / `agentic-tool-abuse` 的 `baseline@sha256` + `corpus_refs id@version` + `validated_against` + `request_id` 证据纪律，复制到所有新移植 skill |
-
-※ `UKGovernmentBEIS/inspect_ai` 推定路径已于 2026-11-07 经 GitHub API 确认：仓库存在、公开、MIT。
-
-**决策要点**：P0 只做第 7 / 8 面且只用纯 markdown 来源（`wgpsec/AboutSecurity` 一份补 E / F / 供应链）；官方资产（PyRIT、garak、ModelScan、mcp-scan、PoisonedRAG、vec2text、Inspect AI）定位为**考前本地验证与举证**，24h 监考 VPN 内不装重依赖；官方仓无「怎么打 MLflow」类进攻交付（Anthropic 官方 skills 仅通用技能），社区来源须**先人工通读全文再引入**；A / C 冻结不加 skill。**预期效果**：补齐 D / E / F 硬缺口（B → 4 强、D → 3 良～4 强、E / F / 供应链 → 3 良）；按 75/100 通过线，P0 第 7 / 8 面与 P2 报告证据链是达标关键。
-
----
-
-## 4. 靶机总表
-
-### 4.1 官方 / 成熟团队靶机总表（按 OSAI 场景覆盖排序）
+### 1.1 官方 / 成熟团队靶机总表（按 OSAI 场景覆盖排序）
 
 | 靶机 | 出品方 | 覆盖的 OSAI 场景 | GitHub repo | 许可 | 资质 |
 |---|---|---|---|:---:|:---:|
@@ -74,7 +20,7 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | A2ASecBench | SaFo-Lab（ICLR 2026 官方代码） | **A2A / multi-agent 协议感知攻击**：六类攻击、三领域 ASR、可插拔 SUT、本地可执行 | `SaFo-Lab/A2ASecBench` | MIT | ◎ |
 | swarm-test | 社区 | multi-agent 可靠性混沌测试（静态、无 LLM 调用）——**非攻击工具** | `surajkumar811/swarm-test` | MIT | ○ |
 
-### 4.2 官方验证靶场补充（不进主表，仅用于考前训练）
+### 1.2 官方验证靶场补充（不进主表，仅用于考前训练）
 
 | 资产 | 用途 | GitHub 来源 |
 |---|---|---|
@@ -85,7 +31,7 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | `PurpleLlama` / `garak` / `aws-security-cards` | Meta CyberSecEval、NVIDIA 探针库、SageMaker 攻击卡片 | `meta-llama/PurpleLlama`、`NVIDIA/garak`、`TocConsulting/aws-security-cards` |
 | `awesome-security-skills` / `Claude-Red` | 技能索引（**无 LICENSE 文件**）；78 个红队 SKILL.md（MIT，云深度不足） | `securityfortech/awesome-security-skills`、`SnailSploit/Claude-Red` |
 
-### 4.3 靶机 × OSAI 场景覆盖矩阵（定性）
+### 1.3 靶机 × OSAI 场景覆盖矩阵（定性）
 
 场景缩写：**LLM**=Attacking LLMs｜**Agt**=AI agents｜**MA**=multi-agent/A2A｜**RAG**=RAG 管线｜**Emb**=Embeddings/向量库｜**MCP**=MCP/tool surfaces｜**SC**=AI/ML 供应链｜**Infra**=AI 基础设施/编排框架｜**Cloud**=AI 云安全｜**Rep**=报告/证据。●=直接覆盖，◐=部分，—=不覆盖。
 
@@ -105,7 +51,7 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 
 **结论**：单一覆盖最广是 **OWASP AIVP**（50+ 场景 / 4 阶段，几乎触及全部 8 面），且是本 harness 已验证 skill 的现成靶场——`agentic-tool-abuse` → `aivp-mcp (local Docker AIVP lab, Phase 4 MCP_03/06/08/11, llama3.2 via Ollama)`，`prompt-extraction` → `aivp-lan (192.168.40.189 AIVP lab, PI_01)`。基础设施/云侦察由 AIRT Labs + TryHackMe 补，A2A/multi-agent 由 A2ASecBench + ControlArena + FinBot 补，MCP 由 Appsecco lab 补，RAG/向量库由 PoisonedRAG/AgentPoison 补。
 
-### 4.4 Agent / Multi-Agent 专项靶机
+### 1.4 Agent / Multi-Agent 专项靶机
 
 | 层级 | 靶机 / 框架 | 关键能力 | GitHub repo | 资质 |
 |---|---|---|---|:---:|
@@ -124,7 +70,7 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 
 补充知识源：promptfoo **LM Security DB**（https://www.promptfoo.dev/lm-security-db/ ，2026-11-07 核实**无公开 GitHub 仓库**）的 **Cascading Agent False Consensus**（LLM-MAS 级联错误放大 / 共识腐化）是 multi-agent 特有攻击模式，可作 `rt9-multi-agent` 用例补充。
 
-### 4.5 非 GitHub 托管的官方 / 商业靶场（补充，不计入选型主表）
+### 1.5 非 GitHub 托管的官方 / 商业靶场（补充，不计入选型主表）
 
 | 平台 | 覆盖 | 入口 |
 |---|---|---|
@@ -137,20 +83,20 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | AI Village CTF (DEF CON) / HackTheBox AI Challenges | 综合 AI 安全 CTF | `aivillage.org`、`hackthebox.com` |
 | OWASP Insecure Agent Samples (ASI) | 故意不安全的 LangGraph / AutoGen / CrewAI agent 样例 | `genai.owasp.org/resource/insecure-agent-samples/` |
 
-### 4.6 靶机选用优先级（按 OSAI 24h 收益排序）
+### 1.6 靶机选用优先级（按 OSAI 24h 收益排序）
 
-> 本节 `P0/P1/P2` 指**靶机投入顺序**，与第 3 节主表「最该补」列的 `P0–P3`（**skill 补齐顺序**）是两套独立优先级，不可混用。
+> 本节 `P0/P1/P2` 指**靶机投入顺序**，与原第 3 节主决策表「最该补」列的 `P0–P3`（**skill 补齐顺序**）是两套独立优先级，不可混用。
 
-- **P0**：**OWASP AIVP** 为主靶场——覆盖 8 面最广、MIT、本地 Docker + Ollama 无云依赖，且 `agentic-tool-abuse` / `prompt-extraction` 已在其上验证过，新移植 skill 的 `validated_against` 统一指向 AIVP 场景编号（MCP_03/06/08/11、PI_01…）；用 **MS AIRT Playground Labs + TryHackMe AI System Recon** 补基础设施/云侦察（主表第 8 面 E/F 最弱）。
+- **P0**：**OWASP AIVP** 为主靶场——覆盖 8 面最广、MIT、本地 Docker + Ollama 无云依赖，且 `agentic-tool-abuse` / `prompt-extraction` 已在其上验证过，新移植 skill 的 `validated_against` 统一指向 AIVP 场景编号（MCP_03/06/08/11、PI_01…）；用 **MS AIRT Playground Labs + TryHackMe AI System Recon** 补基础设施/云侦察（原主表第 8 面 E/F 最弱）。
 - **P1**：**A2ASecBench + ControlArena + FinBot CTF** 补 multi-agent / A2A（协议层 / 控制层 / 平台层）；**Appsecco vulnerable-mcp-servers-lab + mcp-attack-labs** 补 MCP（配 `mcp-scan` 前后对照）；**PoisonedRAG + AgentPoison + rag-redteam** 补 RAG/向量库。
 - **P2**：`damn-vulnerable-llm-agent` / `DVLAA` / `MyLLMAuto` 做 agent 单点到跨链手工链攻训练；OffSec 官方 Labs / Capstone 留考前冲刺（最贴考试形态，但耗 Azure 额度且不可复现）。
 - **约束**：靶机均为**考前本地训练与验证**用途；24h 监考 VPN 内不部署靶机、不装重依赖，只把验证产出的 `validated_against` / `last_validated` / 原始证据路径写回 skill 契约。
 
 ---
 
-## 5. 专项攻击工具（A2A / MCP / RAG）
+## 2. 专项攻击工具（A2A / MCP / RAG）
 
-### 5.1 A2A 协议专业攻击工具
+### 2.1 A2A 协议专业攻击工具
 
 | 工具 | 定位 | GitHub repo | 资质 / 许可 |
 |---|---|---|:---:|
@@ -160,9 +106,9 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | a2a_attack | 针对 Google A2A ADK 的 `attacks` / `defenses` / `demos` / `reports` / `scripts` 完整实验目录（2025-11） | `Farayabaig/a2a_attack` | ○ / 无 LICENSE 文件 |
 | A2A 协议本体 / 样例 | Google 发起、**已捐赠 Linux Foundation**；协议规范 + `a2a-python` SDK + 官方 samples（含 `hosts/multiagent` 编排样例）——作**靶标与协议参照**，非攻击工具。samples 仓已迁移至 `a2aproject/a2a-samples`（原 `google-a2a/a2a-samples`） | `a2aproject/A2A`、`a2aproject/a2a-python`、`a2aproject/a2a-samples` | ◎ / Apache-2.0 |
 
-公开 A2A 攻击面锚点（**二手安全研究，编号与细节需核实**）：Agent Card 抢注/仿冒、`jku` 验签信任注入、有状态会话指令走私、执行中任务恶意回调注册（结果外带 + SSRF）、推送通知 SSRF（CVE-2026-90790，`a2a-python` ≤1.1.3）、IBM ContextForge A2A 端点 DNS rebinding SSRF（CVE-2026-77822）、`python-a2a` ≤0.5.5 路径穿越（CVE-2025-6167）——对应 2.2 考纲的 impersonation / relay / replay 与 schema / serialization 缺陷。
+公开 A2A 攻击面锚点（**二手安全研究，编号与细节需核实**）：Agent Card 抢注/仿冒、`jku` 验签信任注入、有状态会话指令走私、执行中任务恶意回调注册（结果外带 + SSRF）、推送通知 SSRF（CVE-2026-90790，`a2a-python` ≤1.1.3）、IBM ContextForge A2A 端点 DNS rebinding SSRF（CVE-2026-77822）、`python-a2a` ≤0.5.5 路径穿越（CVE-2025-6167）——对应原 2.2 节考纲的 impersonation / relay / replay 与 schema / serialization 缺陷。
 
-### 5.2 MCP 专业攻击工具与靶机
+### 2.2 MCP 专业攻击工具与靶机
 
 | 工具 | 定位 | GitHub repo | 资质 / 许可 |
 |---|---|---|:---:|
@@ -178,7 +124,7 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | MCP 标准 / workshop | OWASP MCP Top 10（MCP03 Tool Poisoning）；MCP 安全 workshop（含 Invariant 披露索引） | `owasp.org/www-project-mcp-top-10`、`SamMorrowDrums/mcp-security-workshop` | ◎ / ○ |
 | 工具索引 | 2026 MCP/agent 扫描器全景清单 | `scadastrangelove/awesome-ai-security-tools`、`8kSec/awesome-ai-security` | ○ |
 
-### 5.3 RAG / 向量库专业攻击工具
+### 2.3 RAG / 向量库专业攻击工具
 
 | 工具 | 定位 | GitHub repo | 资质 / 许可 |
 |---|---|---|:---:|
@@ -190,15 +136,15 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | RAG 测试 SKILL.md | `testing-prompt-injection-in-rag-pipelines`（RoE、非生产环境约束、向量库枚举与指纹识别） | `peteedoo` 技能库 / `adriannoes/awesome-agentic-ai`（镜像，MIT，2026-11-07 实测） | ○ / 待核（原库） |
 | 论文级攻击（**无已确认 repo**） | ConfusedPilot（M365 Copilot confused deputy）、HijackRAG、BadRAG（0.04% 语料投毒）、InceptionRAG（多跳逻辑陷阱）、One Shot Dominance | 待核 | ◎ 学术 |
 
-公开 RAG 漏洞锚点（**二手来源，需核实**）：EchoLeak CVE-2025-32711（M365 Copilot 零点击提示注入，CVSS 9.3）、Open WebUI 知识库越权写入 CVE-2026-28788 / CVE-2026-44554（只读用户可覆盖他人语料）——对应主表第 4/5 面的「跨租户隔离」缺口。
+公开 RAG 漏洞锚点（**二手来源，需核实**）：EchoLeak CVE-2025-32711（M365 Copilot 零点击提示注入，CVSS 9.3）、Open WebUI 知识库越权写入 CVE-2026-28788 / CVE-2026-44554（只读用户可覆盖他人语料）——对应原主表第 4/5 面的「跨租户隔离」缺口。
 
 ---
 
-## 6. GitHub 来源索引
+## 3. GitHub 来源索引
 
 > 合并自原选型来源与 2026-11-05 靶机 / 专项工具补编，已去重；许可列均为 2026-11-07 经 GitHub API 实测核验的结果。
 
-### 6.1 选型与靶机 / 专项工具来源
+### 3.1 选型与靶机 / 专项工具来源
 
 **◎ 官方 / 机构级**
 
@@ -276,7 +222,7 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | SamMorrowDrums mcp-security-workshop | https://github.com/SamMorrowDrums/mcp-security-workshop | 无 LICENSE 文件 |
 | hacking-ai-definitive-guide（CTF 附录） | https://github.com/randalltr/hacking-ai-definitive-guide | CC BY-NC 4.0（非商业，内容开放） |
 
-### 6.2 官方政策与考纲（非 GitHub）
+### 3.2 官方政策与考纲（非 GitHub）
 
 | 项目 | URL |
 |---|---|
@@ -288,78 +234,3 @@ A2A 是主表第 3 面（multi-agent）的协议层延伸：移植 `rt9-multi-ag
 | PortSwigger Web LLM Attacks | https://portswigger.net/web-security/llm-attacks |
 | Lakera Gandalf / Agent Breaker | https://gandalf.lakera.ai/ |
 | Dreadnode Crucible | https://crucible.dreadnode.io/ |
-
----
-
-## 7. 注意事项（限制与待核项）
-
-### 7.1 证据强度判定依据（分级标准）
-
-四级判定，按「来源权威性 × 验证方式 × 时效 × 可复现性」综合评定：
-
-| 等级 | 定义 | 判定依据 | 文档示例 |
-|:---:|---|---|---|
-| **S1 一手实测** | 本次调研直接取得的原始字段 | GitHub API（HTTP 200 + `private=false` + `license.spdx_id`）或 raw.githubusercontent 实际响应；2026-11-07 快照；给出 URL 即可复现 | 第 6 节全部许可列；`snyk/agent-scan`、`NVIDIA/SkillSpector`、`Tencent/AI-Infra-Guard` 路径确认 |
-| **S2 官方发布物** | 资产所有方自述的一手页面 | 域名权威（offsec.com / owasp.org / nvidia.com / docs.nvidia.com）且内容为官方自述 | 2.1 考试画像、SkillSpector 官方文档、OWASP Insecure Agent Samples |
-| **S3 多源交叉** | ≥2 个独立来源相互印证且无矛盾 | 官方文档 / 第三方索引 / 搜索快照相互一致 | star 数、mcp-scan → Snyk 收购、a2a-samples 迁移 Linux Foundation、Khaos BSL 1.1 |
-| **S4 单一二手来源** | 仅见于二手清单、论文或第三方介绍；一手页面不可达或无法定位 | 2026-11-07 复查无果，或仅有单一非官方来源 | Vulnerable AI Agent Lab、ConfusedPilot / HijackRAG / BadRAG / InceptionRAG 代码、CVE 细节、ambient-it 培训大纲考纲细节 |
-
-**使用规则**：
-
-- S1 / S2 可直接引用；S3 引用时须注明「检索快照，非实时」（如 star 数）；
-- S4 一律标注「待核」，**引入资产前必须升级为 S1 / S2**（取得一手确认后方可移植）；
-- 许可列语义：`自定义 LICENSE（NOASSERTION）` = API 返回 NOASSERTION，即存在 LICENSE 文件但非标准 SPDX 文本，引用前须读原文；`无 LICENSE 文件` = raw 路径 404，代码公开但默认版权保留，不可直接复制分发；
-- 4.3 覆盖矩阵的 ●/◐/— 为**定性判断**（基于公开 README，未实跑验证），不适用本分级，单独声明。
-
-### 7.2 限制与待核项清单
-
-- **许可已全量复核（2026-11-07 GitHub API）**：第 3–6 节涉及的全部 62 个仓库均真实存在、公开可访问，各许可列已按实测更新。关键修正：① `invariantlabs-ai/mcp-scan` 已由 Snyk 维护为 `snyk/agent-scan`（Apache-2.0）；② `google-a2a/a2a-samples` 已随项目捐赠迁移至 `a2aproject/a2a-samples`；③ promptfoo LM Security DB 无公开 GitHub 仓库（仅 promptfoo.dev 网站产品）；④ Khaos（`ExordexLabs/khaos-sdk` 等）许可 **BSL 1.1，非 OSI 开源、仅 source-available**；⑤ `NVIDIA/SkillSpector`、`Tencent/AI-Infra-Guard`、`snyk/agent-scan` 路径已确认。
-- **仍无已确认官方仓库**（引用前须核实）：Vulnerable AI Agent Lab、ConfusedPilot / HijackRAG / BadRAG / InceptionRAG。
-- **9 个仓库无 LICENSE 文件**（AboutSecurity、DVLAA、MyLLMAuto、llm_verification、a2a_attack、dros-vep-lite、mcp-security-workshop、awesome-ai-security、ai-sec-resources 等）：代码公开可作训练参考，默认版权保留，不可直接复制分发。
-- **二手来源声明**：文中 CVE 编号与考纲细节（A2A impersonation/relay/replay、schema/serialization 缺陷）来自公开安全研究与第三方培训大纲，**非 OffSec 官方考纲原文**；4.3 覆盖矩阵为基于公开 README 的定性判断，未实跑验证；OffSec AI Usage Policy 将 OSAI 列为 AI chatbot 限制条款的**例外**（二手备考站「发现即挂」系误套 OSCP/OSEP 规则）——考前以官方 OSAI Exam Guide 原文为准。
-- **移植注意**：`mukul975/Anthropic-Cybersecurity-Skills` **非 Anthropic 官方**，引用须写全作者名；第三方红队 SKILL.md 天然含注入字符串（Snyk ToxicSkills 统计 91% 恶意 skill 含 `ignore previous instructions` 模式），须人工通读全文 + 隔离环境执行；外部 SKILL.md 多缺本 harness 的 `baseline` / `corpus_refs` / `last_validated` / `validated_against` 契约字段，移植时按已验证 skill 的 frontmatter 规范补齐。
-- 本文档不含任何可直接执行的攻击载荷或命令，仅记录选型与来源。
-
-### 7.3 全文逐条证据等级标注
-
-| 章节 | 条目 | 等级 | 依据 |
-|---|---|:---:|---|
-| 1 | 精简版定位、调研 / 复核日期 | S1 | 本次工作记录，可直接溯源 |
-| 1 | ◎ / ◐ / ○ 资质标记体系 | 约定 | 文档自定义分级，不属事实证据 |
-| 2.1 | 24h 实操、私有 VPN 监考、AI 企业级环境、前置 OSCP、objectives + 报告评分 | S2 | OffSec 官方课程页 / Exam Guide 自述 |
-| 2.1 | 双攻击链、100 分制 75 通过、24h 报告窗口（考生复盘补充） | S4 | 单一二手备考复盘，考前须与官方 Exam Guide 原文核对 |
-| 2.2 | 「A2A 与 multi-agent 是明确考点」大方向 | S3 | 官方课程描述与第三方大纲交叉印证 |
-| 2.2 | impersonation / relay / replay、validation / schema / serialization 缺陷等考纲细节 | S4 | 仅 ambient-it 第三方培训大纲（非官方考纲原文） |
-| 3 | 当前评级 A–E、20 skill 清点（2/20 已验证、18 个 `last_validated: null`） | S1 | 本地 harness 只读清点 |
-| 3 | P0–P3「最该补」列、决策列、决策要点、预期效果 | 约定 | 内部决策 / 推断，非事实证据 |
-| 3 | 工具能力描述与数字（AgentDojo 97 任务 / 629 用例、PoisonedRAG 97% 劫持率、ASB 84.30% ASR 等） | S3 | 论文 / README 与第三方索引交叉，未实跑 |
-| 3 | star 数（wgpsec ★1.8k 等） | S3 | 检索快照，非实时 |
-| 3 | GitHub 来源列与许可列（含 ※ inspect_ai 路径确认） | S1 | 2026-11-07 GitHub API 实测 |
-| 4.1 / 4.2 | 靶机存在性与许可列 | S1 | API 实测 |
-| 4.1 / 4.2 | 出品方归属（OWASP / Microsoft / UK AISI 等） | S3 | 多源交叉印证 |
-| 4.1 / 4.2 | 靶机能力描述与场景数（AIVP 50+ 场景等） | S3 | README / 官方介绍交叉，未实跑 |
-| 4.3 | 覆盖矩阵 ● / ◐ / — 及结论 | 定性 | 基于 README 的内部定性判断（7.1 已声明，不适用分级） |
-| 4.4 | 专项靶机存在性 / 许可 | S1 | API 实测 |
-| 4.4 | Vulnerable AI Agent Lab 行 | S4 | 2026-11-07 复查仍无官方仓库（已标待核） |
-| 4.4 | LM Security DB「无公开 GitHub 仓库」结论 | S1 | 2026-11-07 API 多路径 404 实测 |
-| 4.4 | Cascading Agent False Consensus 模式描述 | S2 | promptfoo.dev 官方网站产品自述 |
-| 4.4 / 4.6 | `agentic-tool-abuse`→aivp-mcp、`prompt-extraction`→aivp-lan 验证记录 | S1 | 本地 harness 契约字段（`validated_against` 等） |
-| 4.5 | OffSec / Lakera / TryHackMe / PortSwigger / OWASP / Crucible 入口 | S2 | 各平台官方页 |
-| 4.5 | HackAPrompt / PromptTrace / Prompt Airlines / HackTheBox AI 关卡细节 | S4 | 单一二手提及，未逐一访问验证 |
-| 4.6 | P0–P3 靶机选用优先级 | 约定 | 内部决策 |
-| 5.1 | A2A 工具存在性 / 许可（含 samples 迁移后路径） | S1 | API 实测；迁移事件本身 S3 多源印证 |
-| 5.1 | 工具能力描述（a2a-scanner 四分析器、A2ASecBench 六类攻击等） | S3 | README / 论文交叉，未实跑 |
-| 5.1 | CVE 锚点（CVE-2026-90790 / -77822 / -2025-6167） | S4 | 二手安全研究，文中已标需核实 |
-| 5.2 | 工具存在性 / 许可（`snyk/agent-scan`、SkillSpector、AI-Infra-Guard 等） | S1 | API 实测 |
-| 5.2 | mcp-scan WhatsApp 外泄实战链、Snyk 15+ 风险、SkillSpector AST / YARA / 污点 | S3 | 官方披露 + 第三方引用交叉 |
-| 5.3 | 工具存在性 / 许可 | S1 | API 实测 |
-| 5.3 | PoisonedRAG 97% / 90%+、BadRAG 0.04% 等攻击效果数字 | S3 | 论文自述 / 二手引用 |
-| 5.3 | peteedoo 原库（RAG 测试 SKILL.md） | S4 | 已标待核；镜像 `adriannoes` MIT 为 S1 实测 |
-| 5.3 | 论文级攻击（ConfusedPilot / HijackRAG / BadRAG / InceptionRAG 代码） | S4 | 无已确认官方仓库（已标待核） |
-| 5.3 | EchoLeak CVE-2025-32711、Open WebUI CVE-2026-28788 / -44554 | S4 | 二手安全研究，文中已标需核实 |
-| 6.1 | 全部 62 项存在性与许可 | S1 | 2026-11-07 API 实测，URL 即复现凭据 |
-| 6.2 | OffSec 课程页 / 政策、OWASP、TryHackMe、PortSwigger、Lakera、Crucible | S2 | 各官方页 |
-| 6.2 | ambient-it 培训大纲 | S4 | 第三方培训材料，非官方考纲原文 |
-| 7.2 | ①–⑤ 关键修正与「无 LICENSE」清单 | S1 | 本次复核记录 |
-| 7.2 | Snyk ToxicSkills「91% 恶意 skill 含注入模式」统计 | S3 | Snyk 官方统计 + 第三方引用交叉 |
-| 7.2 | OffSec AI Usage Policy「OSAI 属 AI chatbot 限制例外」解读 | S2 | 官方政策页自述（细节以官方 Exam Guide 为准） |
