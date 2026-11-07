@@ -1,8 +1,8 @@
-# Python 环境部署手册（uv）（供 AI IDE / Agent 执行）
+# Python 环境部署手册（uv）— Windows（供 AI IDE / Agent 执行）
 
 ## 文档说明
 
-本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于自动完成基于 uv 的 Python 项目环境搭建、国内镜像配置与安全工具包安装。
+本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 **Windows** 上自动完成基于 uv 的 Python 项目环境搭建、国内镜像配置与安全工具包安装。
 Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；初始化与安装类步骤幂等，已完成的内容会自动跳过。
 
 ## 0. 参数区（执行前由用户确认或使用默认值）
@@ -16,42 +16,34 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；初始�
 
 ## 1. 前置检查（只读，不修改系统）
 
-```bash
+```powershell
 # uv 是否已安装
-uv --version 2>/dev/null || echo "UV_NOT_INSTALLED"
+uv --version; if (-not $?) { echo "UV_NOT_INSTALLED" }
 
-# Windows 执行策略（PowerShell）
+# 执行策略（PowerShell）
 Get-ExecutionPolicy -Scope CurrentUser
 
 # 项目是否已初始化
-ls "$PROJECT_DIR/pyproject.toml" 2>/dev/null || echo "NO_PROJECT"
-
-# WSL 内 pip 是否已安装
-pip3 --version 2>/dev/null || echo "PIP_NOT_INSTALLED"
+Test-Path "$PROJECT_DIR/pyproject.toml" ? "PROJECT_EXISTS" : "NO_PROJECT"
 ```
 
 判定逻辑：
 
 - uv 未安装 → 先执行 2.1。
-- Windows 下执行策略为 `Restricted` → 先执行 2.2。
+- 执行策略为 `Restricted` → 先执行 2.2。
 - 项目已有 `pyproject.toml` → 跳过第 3 章。
-- WSL 内 `pip3` 可用 → 跳过第 5 章。
 
 ## 2. 环境准备
 
 ### 2.1 安装 uv（未安装时）
 
-```bash
-# Unix / WSL
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows（PowerShell）
+```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-安装后新开 shell 或 `source ~/.local/bin/env` 使 `uv` 生效，用 `uv --version` 验证。
+安装后新开终端使 `uv` 生效，用 `uv --version` 验证。
 
-### 2.2 Windows 设置执行策略（仅当前用户，需 PowerShell）
+### 2.2 设置执行策略（仅当前用户，需 PowerShell）
 
 ```powershell
 # 已是 RemoteSigned/Unrestricted 时跳过
@@ -62,7 +54,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ## 3. 初始化 Python 项目环境
 
-```bash
+```powershell
 cd "$PROJECT_DIR"
 
 # 已有 pyproject.toml 时跳过
@@ -81,38 +73,33 @@ uv init --python 3.13
 
 ### 4.1 配置国内 PyPI 源
 
-```bash
+```powershell
 # pip 侧（已是 PYPI_INDEX 时跳过）
 pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/simple
 
 # uv 侧（uv 不读取 pip 配置，通过环境变量生效）
-export UV_DEFAULT_INDEX="https://mirrors.tuna.tsinghua.edu.cn/pypi/simple"
+# 当前会话：
+$env:UV_DEFAULT_INDEX = "https://mirrors.tuna.tsinghua.edu.cn/pypi/simple"
+# 持久化（当前用户）：
+[Environment]::SetEnvironmentVariable("UV_DEFAULT_INDEX", "https://mirrors.tuna.tsinghua.edu.cn/pypi/simple", "User")
 ```
 
-## 5. WSL 安装 pip（未安装时）
+## 5. 安装安全评估工具包
 
-```bash
-sudo apt update
-sudo apt install python3-pip -y
-pip3 --version   # 验证
-```
-
-## 6. 安装安全评估工具包
-
-```bash
+```powershell
 uv pip install pyrit deepeval garak adversarial-robustness-toolbox counterfit trufflehog fickling
 uv pip install giskard
 ```
 
 验证：
 
-```bash
-uv pip list | grep -E "pyrit|deepeval|garak|giskard"
+```powershell
+uv pip list | Select-String -Pattern "pyrit|deepeval|garak|giskard"
 ```
 
 > 部分包体积较大或依赖系统库，安装失败时逐个排查：先单独安装失败包，将报错反馈给用户。
 
-## 7. Agent 执行注意事项
+## 6. Agent 执行注意事项
 
 - `uv init` 会生成示例文件，仅在空目录或用户确认时执行。
 - `uv pip install` 安装进项目虚拟环境；在项目外执行时会装入当前激活的环境，Agent 应先确认目标环境。

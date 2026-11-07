@@ -1,8 +1,8 @@
-# Promptfoo 部署手册（供 AI IDE / Agent 执行）
+# Promptfoo 部署手册 — Windows（供 AI IDE / Agent 执行）
 
 ## 文档说明
 
-本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于自动完成 Promptfoo 的全局安装、验证与红队测试基础使用。
+本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 **Windows** 上自动完成 Promptfoo 的全局安装、验证与红队测试基础使用。
 Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装与初始化幂等，已完成的内容会自动跳过。
 
 ## 0. 参数区（执行前由用户确认或使用默认值）
@@ -14,22 +14,22 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装�
 
 ## 1. 前置检查（只读，不修改系统）
 
-```bash
-node --version 2>/dev/null || echo "NODE_NOT_INSTALLED"
-npm --version 2>/dev/null || echo "NPM_NOT_INSTALLED"
-promptfoo --version 2>/dev/null || echo "PROMPTFOO_NOT_INSTALLED"
-ls "$PROJECT_DIR/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
+```powershell
+node --version; if (-not $?) { echo "NODE_NOT_INSTALLED" }
+npm --version; if (-not $?) { echo "NPM_NOT_INSTALLED" }
+promptfoo --version; if (-not $?) { echo "PROMPTFOO_NOT_INSTALLED" }
+Test-Path "$PROJECT_DIR/promptfoo.yaml" ? "CONFIG_EXISTS" : "NO_CONFIG"
 ```
 
 判定逻辑：
 
-- Node/npm 不可用 → 先按 [npm.md](../npm/npm.md) 第 2 章安装 Node.js，再继续。
+- Node/npm 不可用 → 先按 [npm.md](./npm.md) 第 2 章安装 Node.js，再继续。
 - `promptfoo --version` 正常输出 → 跳过第 2 章。
 - 项目下已有 `promptfoo.yaml` → 跳过第 3 章初始化。
 
 ## 2. 全局安装
 
-```bash
+```powershell
 # 走默认源
 npm install -g promptfoo --allow-scripts
 
@@ -41,17 +41,17 @@ npm install -g promptfoo --registry=https://registry.npmmirror.com --allow-scrip
 
 ## 3. 验证安装
 
-```bash
+```powershell
 promptfoo --version
 ```
 
-正常输出版本号 → 安装成功；命令不可用时检查 npm 全局路径是否在 PATH 中（`npm root -g`、`where.exe npm` / `which promptfoo`）。
+正常输出版本号 → 安装成功；命令不可用时检查 npm 全局路径是否在 PATH 中（`npm root -g`、`where.exe promptfoo`）。
 
 ## 4. 初始化项目
 
 在 `PROJECT_DIR` 下执行，会生成配置示例文件并引导下一步：
 
-```bash
+```powershell
 cd "$PROJECT_DIR"
 promptfoo init
 
