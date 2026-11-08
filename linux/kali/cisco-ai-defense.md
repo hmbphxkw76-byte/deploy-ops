@@ -115,7 +115,7 @@ cisco-aibom --help | head -n 5
 
 DVAA（Damn Vulnerable AI Agent，OpenA2A 出品）是 AI Agent 攻击训练靶场：主服务 9000 端口为 SPA 控制台，另有 21 个 agent 分别监听 7001+ 端口（自定义 api 协议，无标准 A2A Agent Card）。
 
-已部署一键扫描脚本 `/usr/local/bin/dvaa-scan`（源码见仓库 `deploy-ops` 维护记录）：
+已部署一键扫描脚本 `/usr/local/bin/dvaa-scan`（已写入服务器，可直接使用）：
 
 ```bash
 # 批量扫描全部 agent（端点安全头/HTTPS/健康检查），结果存 /root/dvaa-scan-results/
@@ -131,6 +131,28 @@ dvaa-scan http://192.168.40.183:9000
 4. 汇总各 agent 的 `Total Findings` 到 `summary.txt`。
 
 **使用前提**：第 6 章的 a2a-scanner 私网放行补丁必须已应用（否则所有 agent 端口都报 `Private IP addresses not allowed`）。
+
+### DVAA 红队对抗脚本（Prompt Injection 自动化）
+
+仓库脚本 `tools/dvaa-redteam.py`，已部署到 `/usr/local/bin/dvaa-redteam.py`。对 DVAA 的 agent 批量执行多类 prompt injection，采集 `attacks.detected` 检测结果并按「精确 secret 模式」量化数据外泄（不做关键词启发式，避免误报）。
+
+```bash
+# 枚举 agent 清单（端口动态下发，无需手工维护）
+python3 /usr/local/bin/dvaa-redteam.py --list
+
+# 攻击 legacybot（critical），每载荷 5 轮（应对非确定性后端）
+python3 /usr/local/bin/dvaa-redteam.py --target legacybot --rounds 5
+
+# 攻击全部 21 个 agent，每载荷 3 轮
+python3 /usr/local/bin/dvaa-redteam.py --target all --rounds 3
+
+# 只跑某几类载荷 + 输出完整证据
+python3 /usr/local/bin/dvaa-redteam.py --target legacybot --cats obfuscation,roleplay -o /tmp/rt.json
+```
+
+载荷类别（`--cats` 参数）：`direct`（直接注入）/ `jailbreak`（越狱）/ `exfiltration`（数据外泄）/ `obfuscation`（模板占位符、debug 措辞混淆）/ `roleplay`（角色扮演游戏化）。
+
+实测结论（legacybot，15 次）：漏报率约 53%，其中 **`obfuscation` 与 `roleplay` 两类 100% 绕过检测**（`detected=false`），`direct`/`jailbreak`/`exfiltration` 大部分被检出；模型层零数据外泄（安全对齐 LLM 兜底）。详见 `reports/red-team-dvaa-20261108.md`。
 
 ### 可选环境变量（按需配置，不配也能用离线分析器）
 
@@ -170,3 +192,4 @@ export MCP_SCANNER_LLM_ENDPOINT="http://192.168.40.189:11434"  # 指向已有 Ol
 | 修复方案 | `uv pip install --python /root/.local/share/uv/tools/cisco-aibom/bin/python duckdb==1.1.3`（满足 aibom 的 `duckdb>=1.0.0` 约束），修复后全部模块导入正常、CLI 可用 |
 | 遗留说明 | aibom 未装 `[all]` extras（agentic/LLM 依赖 onnxruntime，同样要求 AVX，此 CPU 无法运行）；核心扫描功能不受影响，`analyze` 子命令需在支持 AVX2 的机器上使用 |
 | 后续使用（2026-11-08） | 首次实际扫描 `http://192.168.40.183:9000`：a2a-scanner 官方硬编码禁止私网地址（防 SSRF，CLI 无开关），已按第 6 章补丁方案放行；扫描返回 2 个发现（HTTP 明文协议、缺少安全响应头）。经探测确认该端点是 **DVAA（Damn Vulnerable AI Agent，OpenA2A 出品的 AI Agent 攻击训练靶场）**，SPA 对未知路径一律回退 index.html，故无 A2A Agent Card、也非 MCP server（mcp-scanner 扫 `/` 与 `/mcp` 均 404）。2 个发现属靶场预期形态，可将其作为 AI Defense 工具集的检测演练目标 |
+| DVAA 批量扫描（2026-11-08） | 部署 `/usr/local/bin/dvaa-scan` 并完成首轮全量扫描：21 个 agent（7001-7023 端口，securebot/legacybot/memorybot 等）全部 3 个发现（HTTP 明文、缺安全头、无标准 card，属靶场预期）。已按 agent 元数据生成 21 个 A2A card（`/root/dvaa-scan-results/cards/`），`scan-card --analyzers yara` 验证通过——card 中的 vulnerabilities 描述（如 legacybot 的 promptInjection）可触发 YARA 的 PROMPT INJECTION 检测规则，可用于蓝队规则演练 |
