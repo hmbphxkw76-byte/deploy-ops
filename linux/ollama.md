@@ -65,10 +65,14 @@ ollama --version
 ## 3. 创建运行用户（缺失时）
 
 ```bash
-id ollama >/dev/null 2>&1 || sudo useradd -r -s /usr/sbin/nologin -M ollama
+id ollama >/dev/null 2>&1 || sudo useradd -r -s /usr/sbin/nologin -m -d /home/ollama ollama
+sudo mkdir -p /home/ollama/.ollama
+sudo chown -R ollama:ollama /home/ollama
 ```
 
 > 服务文件以 `User=ollama` 运行，用户不存在会导致服务启动失败，故此步为必检项。
+> **注意：不要使用 `-M`（不建主目录）。** Ollama 启动时需要在 `/home/ollama/.ollama` 下生成密钥与配置，若目录不存在且 `/home` 对 ollama 用户不可写，服务会报
+> `Error: could not create directory mkdir /home/ollama: permission denied` 并反复重启。
 
 ## 4. 配置 systemd 服务
 
@@ -117,7 +121,10 @@ curl -s http://127.0.0.1:11434/api/version
 判定：
 
 - 服务 active 且 `/api/version` 返回 JSON 版本信息 → 部署成功。
-- 服务启动失败 → `journalctl -u ollama --no-pager -n 50` 查看日志，常见原因：ollama 用户不存在（第 3 章）、二进制路径不符（第 2 章）。
+- 服务启动失败 → `journalctl -u ollama --no-pager -n 50` 查看日志，常见原因：
+  - `could not create directory mkdir /home/ollama: permission denied` → 第 3 章主目录未创建（勿用 `useradd -M`），执行 `mkdir -p /home/ollama/.ollama && chown -R ollama:ollama /home/ollama` 后重启服务。
+  - `ollama` 用户不存在 → 补做第 3 章。
+  - 二进制路径不符 → 检查第 2 章解压目录，确认 `/usr/bin/ollama` 存在。
 
 ## 6. 日常管理（Agent 按需调用）
 
@@ -135,3 +142,19 @@ curl -s http://127.0.0.1:11434/api/version
 - `OLLAMA_HOST=0.0.0.0` 会将服务暴露给局域网，生产环境建议收紧 `OLLAMA_ORIGINS` 并配合防火墙规则，修改前向用户确认。
 - 修改服务文件后必须 `daemon-reload` 再重启，否则配置不生效。
 - 每完成一章，向用户汇报当前状态与下一步计划。
+
+## 8. 部署执行记录
+
+| 项目 | 值 |
+| --- | --- |
+| 执行日期 | 2026-11-08 |
+| 目标主机 | 192.168.40.189（Ubuntu 24.04.2 LTS，hostname: ubuntu） |
+| 登录账号 | 实际可用账号为 `root`（密码 2027）；`roo` 账号认证失败，已为 root 配置免密公钥 |
+| 安装包 | `/root/ollama-linux-amd64.tar.zst`（1.5G） |
+| 安装版本 | Ollama 0.40.15 |
+| 运行用户 | ollama（uid=999），已创建主目录 `/home/ollama` |
+| 服务状态 | active，开机自启（multi-user.target.wants） |
+| 验证结果 | 本机 `127.0.0.1:11434/api/version` 与局域网 `192.168.40.189:11434/api/version` 均返回 `{"version":"0.40.15"}`，监听 `*:11434` |
+| 运行模式 | CPU 推理（无 GPU），内存 62.9 GiB |
+| 遇到的问题 | 首次启动失败：`useradd -M` 未创建主目录，服务无法写 `/home/ollama/.ollama`。已通过创建目录并 chown 修复，流程已同步更新至第 3 章 |
+| 安全决策（2026-11-08） | 经与用户确认：`OLLAMA_ORIGINS` 保持 `*`，不启用 UFW 防火墙，11434/SSH 允许任意来源网段访问（该服务器有跨网段访问需求，客户端来自 192.168.11.x 与 192.168.40.x 等多个网段，且主机上运行有 Docker 服务占用 80 端口）。此为用户知悉并接受的风险，后续如需收紧按第 5/7 章处理 |
