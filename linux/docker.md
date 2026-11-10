@@ -9,11 +9,11 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装�
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `TARGET_OS` | `ubuntu` | 目标环境：`ubuntu`（走第 1~2 章）或 `windows`（走第 3 章） |
+| `TARGET_OS` | `ubuntu` | 目标环境：`ubuntu`（走第 1~2 章）或 `windows`（走第 3 章）；仅用于选择章节，不参与命令替换 |
 | `DOCKER_APT_MIRROR` | `https://download.docker.com/linux/ubuntu` | Docker apt 仓库地址；国内网络对官方源报 `Could not handshake` 时改用 `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`（GPG key 仍可用官方地址下载） |
 | `REGISTRY_MIRRORS` | `https://docker.xuanyuan.me`、`https://docker.m.daocloud.io`、`https://docker.imgdb.de` | Ubuntu 侧镜像加速地址列表 |
 | `DOCKER_MIRRORS_WIN` | `https://docker.xuanyuan.me`、`https://docker.1ms.run`、`https://docker.m.daocloud.io` | Windows Docker Desktop 镜像加速地址列表 |
-| `RUN_CLEANUP` | `false` | 是否执行第 4 章清理；默认不执行，需用户显式确认 |
+| `RUN_CLEANUP` | `false` | 是否执行第 5 章清理；默认不执行，需用户显式确认 |
 
 ## 1. 前置检查（只读，不修改系统）
 
@@ -55,7 +55,10 @@ docker version
 
 ```bash
 sudo apt-get update
+
+# 可选：整体升级（可能升级内核并要求重启）。用户不希望动系统时可跳过此行
 sudo apt-get upgrade -y
+
 sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
 
 # 添加 Docker 官方 GPG key
@@ -80,7 +83,7 @@ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plug
 
 ### 2.2 配置镜像加速
 
-检查逻辑：若 `/etc/docker/daemon.json` 已包含 `REGISTRY_MIRRORS` 中的地址，则跳过；否则写入并重启服务。
+检查逻辑：若 `/etc/docker/daemon.json` 已包含 `REGISTRY_MIRRORS` 中的地址，则跳过；否则合并写入并重启服务。以下为全新环境的示例（已有配置按下方提示合并，禁止覆盖）。
 
 ```bash
 sudo mkdir -p /etc/docker
@@ -99,7 +102,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart docker
 ```
 
-> 若用户已有自定义 daemon.json（如配置了 data-root 等），Agent 应先读取现有内容并合并 registry-mirrors，禁止直接覆盖。
+> 上面的 `registry-mirrors` 数组应与参数区 `REGISTRY_MIRRORS` 一致（示例值即默认值），参数被覆盖时同步替换。若用户已有自定义 daemon.json（如配置了 data-root 等），Agent 应先读取现有内容并合并 registry-mirrors，禁止直接覆盖。
 
 ### 2.3 服务自启与用户组
 
@@ -137,6 +140,8 @@ Docker Desktop 的配置通过其 GUI 或 settings 文件管理，Agent 步骤�
 }
 ```
 
+> 上面的 `registry-mirrors` 数组应与参数区 `DOCKER_MIRRORS_WIN` 一致（示例值即默认值），参数变更时同步替换。
+
 3. 用户点击 "Apply & Restart" 后，Agent 执行验证命令确认生效。
 
 ## 4. 验证部署
@@ -150,7 +155,7 @@ docker run --rm hello-world
 
 ### 4.1 快速验证脚本（一键检查，含详细日志与自动重试）
 
-保存为 `docker_verify.sh`（Ubuntu 下使用；Windows 侧可手动执行第 4 章开头命令）。脚本只读检查 + 一次 hello-world 拉取运行，不修改任何配置，Agent 可直接执行并按输出判定。
+保存为 `docker_verify.sh`（Ubuntu 下使用；Windows 侧可手动执行第 4 章开头命令）。脚本只做只读检查 + 一次 hello-world 拉取运行（失败自动重试），不修改任何配置，Agent 可直接执行并按输出判定。
 
 日志说明：
 
@@ -171,7 +176,7 @@ docker run --rm hello-world
 - 脚本汇总时输出总耗时，便于 Agent 判断是否卡在慢速网络环节。
 
 ```bash
-#! /bin/bash
+#!/bin/bash
 # Docker 快速验证脚本：安装、服务、镜像加速、run 能力、compose 插件（含详细日志、自动重试与超时控制）
 # 用法:   bash docker_verify.sh [镜像加速地址1 地址2 ...]
 #         LOG_FILE=/path/to/xx.log bash docker_verify.sh          # 自定义日志路径
@@ -184,7 +189,6 @@ MIRRORS=("$@")   # 不传参则跳过镜像地址逐一比对，仅检查是否�
 PASS=0; FAIL=0; SKIP=0
 RETRY_MAX="${RETRY_MAX:-3}"        # 最大尝试次数
 RETRY_DELAY="${RETRY_DELAY:-5}"    # 重试间隔（秒）
-RETRY_OUT=""                       # 最近一次 retry 命令的输出（供调用方读取）
 CMD_TIMEOUT="${CMD_TIMEOUT:-60}"   # 单条检查命令超时（秒）
 HW_TIMEOUT="${HW_TIMEOUT:-120}"    # hello-world 单次尝试超时（秒）
 START_TS=$(date +%s)               # 脚本开始时间（用于统计总耗时）
@@ -246,13 +250,12 @@ check() {  # check <描述> <命令...> —— 执行命令（带超时）并记
   return 0   # 不中断后续检查
 }
 
-retry() {  # retry <描述> <最大次数> <间隔秒> <命令...> —— 带超时的自动重试，最近一次输出存入全局 RETRY_OUT
-  local desc="$1" max="$2" delay="$3"; shift 3
+retry() {  # retry <描述> <最大次数> <间隔秒> <超时秒> <命令...> —— 带超时的自动重试
+  local desc="$1" max="$2" delay="$3" tmo="$4"; shift 4
   local i out rc
   for i in $(seq 1 "$max"); do
-    log INFO "执行(第 $i/$max 次, 超时 ${CMD_TIMEOUT}s): $*"
-    out=$(timeout "$CMD_TIMEOUT" "$@" 2>&1); rc=$?
-    RETRY_OUT="$out"
+    log INFO "执行(第 $i/$max 次, 超时 ${tmo}s): $*"
+    out=$(timeout "$tmo" "$@" 2>&1); rc=$?
     if [ $rc -eq 0 ]; then
       log PASS "$desc (第 $i 次尝试成功)"
       [ -n "$out" ] && show_tail "$out" 2
@@ -270,8 +273,8 @@ retry() {  # retry <描述> <最大次数> <间隔秒> <命令...> —— 带超
 }
 
 check_retry() {  # check_retry <描述> <最大次数> <间隔秒> <命令...> —— 带重试的检查项
-  local desc="$1"; shift
-  if retry "$desc" "$@"; then
+  local desc="$1" max="$2" delay="$3"; shift 3
+  if retry "$desc" "$max" "$delay" "$CMD_TIMEOUT" "$@"; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
@@ -331,8 +334,7 @@ fi
 
 # 6. 拉取并运行 hello-world（验证端到端可用，带超时与重试）
 log INFO "运行 hello-world（单次超时 ${HW_TIMEOUT}s，自动重试最多 $RETRY_MAX 次，间隔 ${RETRY_DELAY}s）..."
-RETRY_OUT=""
-if retry "hello-world 运行成功" "$RETRY_MAX" "$RETRY_DELAY" timeout "$HW_TIMEOUT" docker run --rm hello-world; then
+if retry "hello-world 运行成功" "$RETRY_MAX" "$RETRY_DELAY" "$HW_TIMEOUT" docker run --rm hello-world; then
   PASS=$((PASS+1))
 else
   log FAIL "hello-world 最终失败，多为网络/加速问题（详见上方各次尝试的输出摘要）"
@@ -359,7 +361,7 @@ Agent 判定规则：
 在任意支持 Agent 的 IDE（Trae、Qoder、WorkBuddy 等）中直接下达指令即可，例如：
 
 ```text
-按 docker/docker.md 第 4.1 章的快速验证脚本验证 Docker 部署，
+按 linux/docker.md 第 4.1 章的快速验证脚本验证 Docker 部署，
 从参数区读取 REGISTRY_MIRRORS 作为比对地址，执行后汇报结果与日志路径。
 ```
 

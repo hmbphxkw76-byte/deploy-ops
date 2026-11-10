@@ -10,7 +10,7 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；各步�
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `TARGET_HOST` | `192.168.40.188` | 目标主机（Kali，hostname: chengdu-linux） |
+| `TARGET_HOST` | `192.168.40.188` | 目标主机（示例为本次部署环境，按实际替换） |
 | `ACCOUNT` | `root` | 登录账号（已配置免密公钥） |
 | `PYTHON_VER` | `3.13` | uv 托管的 Python 版本（工具要求 3.11+，官方示例用 3.13） |
 
@@ -45,9 +45,10 @@ free -h | head -n 2
 
 判定逻辑：
 
+- 以下所有命令均在目标主机上执行：本机即目标时直接执行，否则先 `ssh "${ACCOUNT}@${TARGET_HOST}"` 登录（或由 Agent 逐条远程执行）。
 - uv 未安装 → 执行第 2 章。
 - `~/.local/bin` 不在 PATH → 将 `export PATH="$HOME/.local/bin:$PATH"` 写入 `~/.zshrc`（Kali 默认 shell 为 zsh）。
-- Python < 3.11 → 无需升级系统 Python，`uv tool install --python 3.13` 会自动下载 uv 托管的 3.13 解释器。
+- Python < 3.11 → 无需升级系统 Python，`uv tool install --python "${PYTHON_VER:-3.13}"` 会自动下载 uv 托管的对应版本解释器。
 
 ## 2. 安装 uv（缺失时）
 
@@ -63,19 +64,19 @@ uv --version
 export PATH="$HOME/.local/bin:$PATH"
 
 # MCP 扫描器（CLI + REST API）
-uv tool install --python 3.13 cisco-ai-mcp-scanner
+uv tool install --python "${PYTHON_VER:-3.13}" cisco-ai-mcp-scanner
 
 # Skill 扫描器（CLI + REST API + pre-commit 钩子）
-uv tool install cisco-ai-skill-scanner
+uv tool install --python "${PYTHON_VER:-3.13}" cisco-ai-skill-scanner
 
 # A2A 协议扫描器（CLI + REST API + 代理）
-uv tool install --python 3.13 cisco-ai-a2a-scanner
+uv tool install --python "${PYTHON_VER:-3.13}" cisco-ai-a2a-scanner
 
 # AI BOM（核心版；analyze 全功能见下方注意事项）
-uv tool install --python 3.13 cisco-aibom
+uv tool install --python "${PYTHON_VER:-3.13}" cisco-aibom
 ```
 
-> **zsh 注意：** zsh 会把 `[all]` 当作通配符并报 `no matches found`。如需安装 aibom 全功能版（含 agentic/LLM 分析），必须转义：`uv tool install --python 3.13 cisco-aibom\[all\]`。全功能版依赖 onnxruntime，旧 CPU 见第 5 章注意事项。
+> **zsh 注意：** zsh 会把 `[all]` 当作通配符并报 `no matches found`。如需安装 aibom 全功能版（含 agentic/LLM 分析），必须转义：`uv tool install --python "${PYTHON_VER:-3.13}" cisco-aibom\[all\]`。全功能版依赖 onnxruntime，对 CPU 指令集有要求，旧 CPU 见第 7 章执行记录。
 
 ## 4. 验证安装
 
@@ -134,7 +135,7 @@ dvaa-scan http://192.168.40.183:9000
 
 ### DVAA 红队对抗脚本（Prompt Injection 自动化）
 
-仓库脚本 `tools/dvaa-redteam.py`，已部署到 `/usr/local/bin/dvaa-redteam.py`。对 DVAA 的 agent 批量执行多类 prompt injection，采集 `attacks.detected` 检测结果并按「精确 secret 模式」量化数据外泄（不做关键词启发式，避免误报）。
+红队脚本 `dvaa-redteam.py` 已部署到目标主机 `/usr/local/bin/`（源文件未收录本仓库，下文按已部署路径调用）。对 DVAA 的 agent 批量执行多类 prompt injection，采集 `attacks.detected` 检测结果并按「精确 secret 模式」量化数据外泄（不做关键词启发式，避免误报）。
 
 ```bash
 # 枚举 agent 清单（端口动态下发，无需手工维护）
@@ -152,7 +153,7 @@ python3 /usr/local/bin/dvaa-redteam.py --target legacybot --cats obfuscation,rol
 
 载荷类别（`--cats` 参数）：`direct`（直接注入）/ `jailbreak`（越狱）/ `exfiltration`（数据外泄）/ `obfuscation`（模板占位符、debug 措辞混淆）/ `roleplay`（角色扮演游戏化）。
 
-实测结论（legacybot，15 次）：漏报率约 53%，其中 **`obfuscation` 与 `roleplay` 两类 100% 绕过检测**（`detected=false`），`direct`/`jailbreak`/`exfiltration` 大部分被检出；模型层零数据外泄（安全对齐 LLM 兜底）。详见 `reports/red-team-dvaa-20261108.md`。
+实测结论（legacybot，15 次）：漏报率约 53%，其中 **`obfuscation` 与 `roleplay` 两类 100% 绕过检测**（`detected=false`），`direct`/`jailbreak`/`exfiltration` 大部分被检出；模型层零数据外泄（安全对齐 LLM 兜底）。完整报告见目标主机 `reports/red-team-dvaa-20261108.md`。
 
 ### 可选环境变量（按需配置，不配也能用离线分析器）
 
@@ -168,7 +169,7 @@ export MCP_SCANNER_LLM_ENDPOINT="http://192.168.40.189:11434"  # 指向已有 Ol
 ### 在 AI IDE（Trae/Qoder）中调用
 
 1. **CLI 方式**：IDE Agent 通过 SSH 到本机直接执行上述命令（需 `~/.local/bin` 在 PATH 中）。
-2. **REST API 方式**：`mcp-scanner-api --host 0.0.0.0 --port 8080` 起服务，远端 Agent 用 curl 调用。
+2. **REST API 方式**：`mcp-scanner-api --host 0.0.0.0 --port 8080` 起服务，远端 Agent 用 curl 调用。绑定 `0.0.0.0` 会暴露到局域网/公网，仅限内网使用，并配合防火墙或前置认证；公网暴露前必须经用户确认。
 3. **MCP 封装**：可用 FastMCP 把上述 CLI 封装成 MCP Server 注册进 IDE，实现 Agent 原生调用。
 
 ## 6. Agent 执行注意事项

@@ -10,7 +10,7 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；配置�
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `NVM_VERSION` | `v0.40.3` | nvm 安装版本 |
-| `NODE_VERSION` | `stable` | 要安装的 Node 版本；**注意**：npmmirror 等国内镜像的版本索引含预发布版，`stable` 按 semver 取最高可能解析到 alpha 版（如 `v27.0.0-alpha`），国内镜像环境下建议显式指定 LTS 版本（如 `22`） |
+| `NODE_VERSION` | `24` | 要安装的 Node 主版本（默认当前 LTS）。**注意**：填 `stable` 时，npmmirror 等国内镜像的版本索引含预发布版，按 semver 取最高可能解析到 alpha 版，建议始终显式指定 LTS 主版本（如 `24`、`22`） |
 | `NPM_REGISTRY` | `https://registry.npmmirror.com` | npm/pnpm 镜像源（中国大陆建议） |
 | `PNPM_VERSION` | `latest` | 要安装的 pnpm 版本 |
 
@@ -44,17 +44,17 @@ pnpm --version 2>/dev/null || echo "PNPM_NOT_INSTALLED"
 
 ```bash
 # 安装 nvm（若前置检查已显示 NVM_INSTALLED 则跳过；raw.githubusercontent.com 不可达时可在地址前加代理前缀，如 https://ghfast.top/）
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION:-v0.40.3}/install.sh" | bash
 
 # 加载 nvm（当前会话）
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-# 安装并启用 Node（NODE_VERSION=stable 时注意参数区的预发布版警告，国内镜像建议显式版本如 22）
+# 安装并启用 Node（默认取参数区 NODE_VERSION；国内镜像建议显式 LTS 主版本）
 export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node/
-nvm install stable
-nvm use stable
-nvm alias default stable
+nvm install "${NODE_VERSION:-24}"
+nvm use "${NODE_VERSION:-24}"
+nvm alias default "${NODE_VERSION:-24}"
 ```
 
 > **非交互会话注意**：Ubuntu 默认 `~/.bashrc` 对非交互 shell 提前 `return`，nvm 初始化块不执行，导致 `ssh host 'node --version'` 或 `bash -lc` 找不到 node。需将 nvm 初始化追加到 `~/.profile`：
@@ -81,7 +81,7 @@ node --version && npm --version
 
 ```bash
 # 已在 NPM_REGISTRY 时跳过
-npm config set registry https://registry.npmmirror.com
+npm config set registry "${NPM_REGISTRY:-https://registry.npmmirror.com}"
 npm config get registry   # 验证输出为目标地址
 ```
 
@@ -99,7 +99,7 @@ npm cache clean --force  # 清理缓存（安装失败时使用）
 **方式一：npm 全局安装（国内镜像加速，推荐）**
 
 ```bash
-npm install -g pnpm@$PNPM_VERSION
+npm install -g "pnpm@${PNPM_VERSION:-latest}"
 ```
 
 **方式二：独立脚本（不依赖 Node.js，系统全新时可用）**
@@ -112,7 +112,7 @@ curl -fsSL https://get.pnpm.io/install.sh | sh -
 
 ```bash
 corepack enable pnpm
-corepack prepare pnpm@$PNPM_VERSION --activate
+corepack prepare "pnpm@${PNPM_VERSION:-latest}" --activate
 ```
 
 ### 4.2 配置国内源
@@ -121,7 +121,7 @@ pnpm 与 npm 共用 `.npmrc` 配置体系：若 3.1 已将 npm 源设为 `NPM_RE
 
 ```bash
 pnpm config get registry   # 输出应为 NPM_REGISTRY；不是则执行下行
-pnpm config set registry https://registry.npmmirror.com
+pnpm config set registry "${NPM_REGISTRY:-https://registry.npmmirror.com}"
 ```
 
 也可写入项目根目录 `.npmrc`（仅对当前项目生效，建议随仓库提交）：
@@ -129,6 +129,8 @@ pnpm config set registry https://registry.npmmirror.com
 ```ini
 registry=https://registry.npmmirror.com
 ```
+
+> 该地址应与参数区 `NPM_REGISTRY` 一致（上面为默认值）。
 
 ### 4.3 验证
 
@@ -156,13 +158,13 @@ pnpm --version
 | `pnpm` 命令不可用 | `pnpm --version`；独立脚本安装后需新开终端使 `PNPM_HOME` 生效 |
 | 网络拉取超时 | `npm config get registry` / `pnpm config get registry` 确认镜像源；`npm ping` 测连通性；必要时切回 `NPM_REGISTRY` |
 | 全局安装权限报错 | 禁止 `sudo npm install -g`；应使用 nvm 管理版本，或修复全局目录权限 |
-| `nvm install stable` 装出预发布版 | npmmirror 的 node 版本索引含预发布版（如 `v27.0.0-alpha.0.0.0`），nvm 按 semver 取最高会选中 alpha。改用显式版本 `nvm install 22`（或 `nvm install --lts`），并 `nvm uninstall` 误装版本 |
+| `nvm install stable` 装出预发布版 | npmmirror 的 node 版本索引含预发布版（如 `v27.0.0-alpha.0.0.0`），nvm 按 semver 取最高会选中 alpha。改用显式版本 `nvm install 24`（或 `nvm install --lts`），并 `nvm uninstall` 误装版本 |
 | SSH 非交互会话 `node`/`nvm` 不可用 | Ubuntu 默认 `~/.bashrc` 对非交互 shell 提前 `return`，nvm 初始化块不执行。将 nvm 初始化（含 `NVM_NODEJS_ORG_MIRROR`）追加到 `~/.profile`，`bash -lc 'node --version'` 验证 |
-| 依赖安装失败 | 先 `npm cache clean --force` 后重试；仍失败时删除 `node_modules` 与 `package-lock.json` 重装（**删除前必须经用户确认**） |
+| 依赖安装失败 | 先 `npm cache clean --force` 后重试；仍失败时删除 `node_modules` 与 lock 文件重装（npm 为 `package-lock.json`，pnpm 为 `pnpm-lock.yaml`；**删除前必须经用户确认**） |
 
 ```bash
 npm cache clean --force
-rm -rf node_modules package-lock.json   # 破坏性操作，需用户确认
+rm -rf node_modules package-lock.json pnpm-lock.yaml   # 破坏性操作，需用户确认
 npm install
 ```
 

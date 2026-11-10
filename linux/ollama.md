@@ -30,8 +30,8 @@ ls /etc/systemd/system/ollama.service 2>/dev/null || echo "NO_SERVICE"
 # 解压工具 zstd 是否可用
 command -v zstd >/dev/null 2>&1 && echo "ZSTD_OK" || echo "NO_ZSTD"
 
-# 安装包是否存在
-ls -lh "$OLLAMA_TAR_PATH" 2>/dev/null || echo "TAR_MISSING"
+# 安装包是否存在（未设置参数时按默认路径检查）
+ls -lh "${OLLAMA_TAR_PATH:-./ollama-linux-amd64.tar.zst}" 2>/dev/null || echo "TAR_MISSING"
 ```
 
 判定逻辑：
@@ -51,7 +51,7 @@ sudo apt update && sudo apt install -y zstd
 ### 2.2 解压安装
 
 ```bash
-sudo tar -I zstd -xvf "$OLLAMA_TAR_PATH" -C /usr
+sudo tar -I zstd -xvf "${OLLAMA_TAR_PATH:-./ollama-linux-amd64.tar.zst}" -C "${INSTALL_PREFIX:-/usr}"
 ```
 
 验证：
@@ -60,7 +60,7 @@ sudo tar -I zstd -xvf "$OLLAMA_TAR_PATH" -C /usr
 ollama --version
 ```
 
-> 离线包含 `bin/ollama`、`lib/ollama` 等目录，直接解压到 `/usr` 后二进制位于 `/usr/bin/ollama`。
+> 离线包含 `bin/ollama`、`lib/ollama` 等目录，解压到 `INSTALL_PREFIX`（默认 `/usr`）后二进制位于 `<PREFIX>/bin/ollama`。
 
 ## 3. 创建运行用户（缺失时）
 
@@ -81,27 +81,27 @@ sudo chown -R ollama:ollama /home/ollama
 若 `/etc/systemd/system/ollama.service` 已存在，先读取内容向用户展示差异，确认后再覆盖：
 
 ```bash
-sudo tee /etc/systemd/system/ollama.service > /dev/null <<-'EOF'
+sudo tee /etc/systemd/system/ollama.service > /dev/null <<EOF
 [Unit]
 Description=Ollama Service
 After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/ollama serve
+ExecStart=${INSTALL_PREFIX:-/usr}/bin/ollama serve
 User=ollama
 Group=ollama
 Restart=always
 RestartSec=3
-Environment="OLLAMA_HOST=0.0.0.0"
-Environment="OLLAMA_ORIGINS=*"
-Environment="PATH=$PATH"
+Environment="OLLAMA_HOST=${OLLAMA_HOST:-0.0.0.0}"
+Environment="OLLAMA_ORIGINS=${OLLAMA_ORIGINS:-*}"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 [Install]
 WantedBy=multi-user.target
 EOF
 ```
 
-> `OLLAMA_HOST` / `OLLAMA_ORIGINS` 的值应与参数区一致，Agent 按参数替换后再写入。
+> 服务文件在写入时由 shell 展开参数区变量；`PATH` 固定为标准系统路径（与官方安装脚本一致），不依赖当前会话。修改参数后需重新写文件并 `daemon-reload` + restart。
 
 ### 4.2 启用并启动服务
 
@@ -124,7 +124,7 @@ curl -s http://127.0.0.1:11434/api/version
 - 服务启动失败 → `journalctl -u ollama --no-pager -n 50` 查看日志，常见原因：
   - `could not create directory mkdir /home/ollama: permission denied` → 第 3 章主目录未创建（勿用 `useradd -M`），执行 `mkdir -p /home/ollama/.ollama && chown -R ollama:ollama /home/ollama` 后重启服务。
   - `ollama` 用户不存在 → 补做第 3 章。
-  - 二进制路径不符 → 检查第 2 章解压目录，确认 `/usr/bin/ollama` 存在。
+  - 二进制路径不符 → 检查第 2 章解压目录，确认 `<INSTALL_PREFIX>/bin/ollama`（默认 `/usr/bin/ollama`）存在。
 
 ## 6. 日常管理（Agent 按需调用）
 
@@ -149,7 +149,7 @@ curl -s http://127.0.0.1:11434/api/version
 | --- | --- |
 | 执行日期 | 2026-11-08 |
 | 目标主机 | 192.168.40.189（Ubuntu 24.04.2 LTS，hostname: ubuntu） |
-| 登录账号 | 实际可用账号为 `root`（密码 2027）；`roo` 账号认证失败，已为 root 配置免密公钥 |
+| 登录账号 | 实际可用账号为 `root`（已配置免密公钥，密码不在文档中记录）；`roo` 账号认证失败 |
 | 安装包 | `/root/ollama-linux-amd64.tar.zst`（1.5G） |
 | 安装版本 | Ollama 0.40.15 |
 | 运行用户 | ollama（uid=999），已创建主目录 `/home/ollama` |

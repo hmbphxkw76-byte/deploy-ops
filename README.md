@@ -4,19 +4,26 @@
 
 ## 目录结构
 
-- `linux/` — Linux / Unix 手册，默认 Ubuntu 系统；`docker_kali.md` 为 Kali 专用
-- `tools/` — 选型与决策记录（非部署手册）
+- `linux/` — Linux / Unix 手册，默认 Ubuntu 系统；`linux/kali/` 下为 Kali 专用
+- `docs/` — 选型与决策记录、考前报告（非部署手册）
 
 ## 手册目录
 
 | 手册 | 系统 | 用途 |
 | --- | --- | --- |
-| [linux/docker.md](linux/docker.md) | Linux（Ubuntu） | 安装 Docker、镜像加速、空间清理（含验证脚本） |
-| [linux/docker_kali.md](linux/docker_kali.md) | Linux（Kali） | Kali / Debian 安装 Docker CE 与 Compose 插件 |
+| [linux/docker.md](linux/docker.md) | Linux（Ubuntu）/ Windows | 安装 Docker、镜像加速、空间清理（含验证脚本） |
+| [linux/kali/docker.md](linux/kali/docker.md) | Linux（Kali） | Kali / Debian 安装 Docker CE 与 Compose 插件 |
+| [linux/kali/cisco-ai-defense.md](linux/kali/cisco-ai-defense.md) | Linux（Kali） | Cisco AI Defense 扫描工具集（mcp/skill/a2a-scanner、aibom） |
 | [linux/ollama.md](linux/ollama.md) | Linux（Ubuntu） | 部署 Ollama 离线包与 systemd 服务 |
 | [linux/npm.md](linux/npm.md) | Linux（Ubuntu） | Node.js（nvm）安装、npm 镜像配置与排障 |
 | [linux/promptfoo.md](linux/promptfoo.md) | Linux（Ubuntu） | Promptfoo 安装与红队测试 |
-| [linux/aivp-promptfoo.md](linux/aivp-promptfoo.md) | Linux（Ubuntu） | AIVP 平台（HTTP SSE Provider）对接实战记录 |
+
+## 选型与决策记录
+
+| 文档 | 说明 |
+| --- | --- |
+| [docs/osai-ai300-skill-coverage-decision.md](docs/osai-ai300-skill-coverage-decision.md) | OSAI（AI-300）考前靶机与工具精选、场景覆盖矩阵 |
+| [docs/OSAI-Exam-Report.pdf](docs/OSAI-Exam-Report.pdf) | OSAI 考试报告 |
 
 ## 通用提问模板
 
@@ -52,10 +59,17 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 
 预期行为：安装走逐步执行、失败即停；daemon.json 合并而非覆盖；卷清理与 `system prune -a` 必须逐项确认。
 
-### Kali Docker（linux/docker_kali.md）
+### Kali Docker（linux/kali/docker.md）
 
 ```text
-在 Kali 上按 linux/docker_kali.md 安装 Docker，我不想升级整个系统（跳过 full-upgrade，只装依赖包）。
+在 Kali 上按 linux/kali/docker.md 安装 Docker，我不想升级整个系统（跳过 full-upgrade，只装依赖包）。
+```
+
+### Cisco AI Defense（linux/kali/cisco-ai-defense.md）
+
+```text
+按 linux/kali/cisco-ai-defense.md 在 Kali 上安装 mcp-scanner、skill-scanner、a2a-scanner、aibom，
+装完后对各工具做冒烟验证并汇报。
 ```
 
 ### Node.js / npm（linux/npm.md）
@@ -74,12 +88,6 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```
 
 预期行为：红队测试属于主动测试，Agent 会先与你确认目标再执行。
-
-### AIVP 对接（linux/aivp-promptfoo.md）
-
-```text
-按 linux/aivp-promptfoo.md 的实战记录，把 AIVP 平台配置为 promptfoo 的 HTTP SSE Provider 并跑通评估。
-```
 
 ### Ollama（linux/ollama.md）
 

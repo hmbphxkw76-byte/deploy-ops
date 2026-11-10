@@ -18,7 +18,7 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装�
 node --version 2>/dev/null || echo "NODE_NOT_INSTALLED"
 npm --version 2>/dev/null || echo "NPM_NOT_INSTALLED"
 promptfoo --version 2>/dev/null || echo "PROMPTFOO_NOT_INSTALLED"
-ls "$PROJECT_DIR/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
+ls "${PROJECT_DIR:-.}/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
 ```
 
 判定逻辑：
@@ -30,14 +30,11 @@ ls "$PROJECT_DIR/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
 ## 2. 全局安装
 
 ```bash
-# 走默认源
-npm install -g promptfoo --allow-scripts
-
-# 或指定国内镜像源（网络较慢时）
-npm install -g promptfoo --registry=https://registry.npmmirror.com --allow-scripts
+# 使用参数区镜像源安装
+npm install -g promptfoo --registry="${NPM_REGISTRY:-https://registry.npmmirror.com}" --allow-scripts
 ```
 
-> `--allow-scripts` 允许执行包的安装脚本（Promptfoo 需要）；仅对可信包使用该参数。
+> `--allow-scripts` 允许执行包的安装脚本（Promptfoo 需要）；仅对可信包使用该参数。若 npm 版本较旧、报 `Unknown cli config`，去掉该参数直接安装即可。
 
 ## 3. 验证安装
 
@@ -52,7 +49,7 @@ promptfoo --version
 在 `PROJECT_DIR` 下执行，会生成配置示例文件并引导下一步：
 
 ```bash
-cd "$PROJECT_DIR"
+cd "${PROJECT_DIR:-.}"
 promptfoo init
 
 # 或使用 npx 保证初始化脚本为最新版本：
@@ -99,7 +96,7 @@ ssh -N -L 15500:localhost:15500 root@<server>
 
 ### 6.2 局域网直接访问（可选）
 
-如希望 `http://<server>:15500` 直接访问（不走隧道），在服务器上用 socat 把 localhost:15500 暴露到 0.0.0.0：
+如希望 `http://<server>:15501` 直接访问（不走隧道），在服务器上用 socat 把 localhost:15500 转发到 0.0.0.0:15501（15500 已被 promptfoo 自身占用，故对外用 15501）：
 
 ```bash
 # 安装 socat 并常驻转发
