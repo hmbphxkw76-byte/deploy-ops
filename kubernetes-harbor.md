@@ -563,6 +563,42 @@ kubectl -n <your-ns> create secret docker-registry harbor-pull \
 
 > 若改用 hosts.toml 内嵌凭据，可加 `[host."https://$REG".auth] username = "..." password = "..."`（hosts.toml 支持 `server / capabilities / ca / client / skip_verify / auth / header / override_path`）。
 
+### 6.6 admin 密码一致性检查（values / secret / DB）
+
+**机制（重要）**：Harbor 的 admin 密码**以 DB 为准**。core 启动时若 DB 已有密码，会忽略 `HARBOR_ADMIN_PASSWORD`，日志见 `main.go:108`：
+
+> `Admin password from config (HARBOR_ADMIN_PASSWORD) ignored: password already exists in database. Use Harbor UI or API to change.`
+
+所以 values / secret 里的 `harborAdminPassword` **只在首次初始化生效**；重启 Pod、`helm upgrade` 都不会改密码。改密要么走 Harbor UI / API，要么直接改 DB。
+
+只读一致性检查：
+
+```bash
+H=192.168.40.189:30003
+# 1) values 里的密码
+helm -n harbor get values harbor -o json | jq -r '.harborAdminPassword'
+# 2) secret 里的密码
+kubectl -n harbor get secret harbor-core -o jsonpath='{.data.HARBOR_ADMIN_PASSWORD}' | base64 -d; echo
+# 3) 实测哪个密码能登录（权威判定）
+curl -sk -o /dev/null -w '%{http_code}\n' -u "admin:<密码>" https://$H/api/v2.0/users/current   # 200=生效, 401=已失效
+# 4) DB 里 admin 的密码版本 / 更新时间
+kubectl -n harbor exec harbor-database-0 -- env PGPASSWORD=changeit \
+  psql -U postgres -d registry -tAc \
+  "SELECT username,password_version,update_time FROM harbor_user WHERE user_id=1;"
+```
+
+> **values/secret 与实际登录密码不一致时**：不影响登录（DB 为准），但「从 values 取回密码」的方法会失效，容易误判为「密码被改」。改密后建议同步 values + `helm upgrade`，保持三者一致。
+>
+> **经验：之前为什么误判为「密码被改」**
+> - **现象**：某次登录突然 401，而 values / secret 里的 `harborAdminPassword` 明明没动过，看起来像「Harbor 把密码自动改了」。
+> - **根因**：密码其实以 **DB 为准**；当时是有人**直接改了 DB**（或走了 GUI 改密），values/secret 仍是旧值，于是「values 里的密码」失效。Harbor **不会**自动重置密码。
+> - **判据**：core 日志出现 `Admin password from config ... ignored: password already exists in database` 即证明 core 已忽略 values；再用上面第 3 步实测哪个密码能登录。
+> - **结论**：遇到 401 先分清「DB 密码」与「values 密码」是两个来源，**别把 values 当权威**；改密要么走 UI/API，要么直改 DB 并同步 values。
+>
+> **直接改 DB 的哈希算法**（Harbor 2.15，源码 `src/common/utils/encrypt.go`）：
+> `PBKDF2-HMAC-SHA256(password, salt, 600000, keylen=16) → hex`（32 字符），`password_version='pbkdf2_sha256'`。
+> 注意 `salt` 是 32 位 hex 字符串，**按其 ASCII 字节**参与计算（不是 hex 解码成 16 字节）——实测只有 ASCII 口径能与 Harbor 校验对齐。
+
 ---
 
 ## 7. 最佳实践与踩坑总结（本次安装的实战经验）
@@ -588,6 +624,7 @@ kubectl -n <your-ns> create secret docker-registry harbor-pull \
 | 15 | **push 前先建项目** | Harbor 不会自动建 `library`；用 API `POST /api/v2.0/projects` 建项目 |
 | 16 | **冒烟后清理测试产物** | 删 `demo` 项目需先删仓库（`DELETE /projects/demo/repositories/alpine`），否则 412 |
 | 17 | **集群内拉取要配 `ca` + 凭据** | 自签 CA 要进 containerd `certs.d`；私有项目要 `imagePullSecrets` |
+| 18 | **admin 密码以 DB 为准，不会自动重置** | core 启动检测到 DB 已有密码就忽略 `HARBOR_ADMIN_PASSWORD`（日志 `main.go:108`）；values/secret 仅在首次初始化生效。改密走 UI/API 或直改 DB，改 values 无效。详见 6.6 |
 
 ---
 
@@ -644,6 +681,23 @@ trivy:
 ### 8.7 证书到期
 
 自签证书有效期 1 年（`harbor-ca`）。到期前轮换：删除 secret `harbor-nginx` 触发 chart 重签，或改用正式证书（`expose.tls.certSource: secret` + `expose.tls.secret.secretName`），避免长期依赖自签。
+
+### 8.8 登录 401 / 误以为「admin 密码被改」
+
+```bash
+# 1) core 是否忽略了 values 里的密码
+kubectl -n harbor logs deploy/harbor-core | grep 'password already exists'
+# 2) 实测候选密码（200=生效，401=失效）
+curl -sk -o /dev/null -w '%{http_code}\n' -u "admin:<候选密码>" https://192.168.40.189:30003/api/v2.0/users/current
+# 3) 看 DB 密码版本 / 更新时间
+kubectl -n harbor exec harbor-database-0 -- env PGPASSWORD=changeit \
+  psql -U postgres -d registry -tAc \
+  "SELECT username,password_version,update_time FROM harbor_user WHERE user_id=1;"
+```
+
+- core 日志有 `Admin password from config (HARBOR_ADMIN_PASSWORD) ignored: password already exists in database` → 密码**以 DB 为准**，values/secret 不生效，**不是被自动改**（机制见 6.6）。
+- DB `update_time` 比 values 修改时间新 → 说明有人改过 DB（GUI / API / 直接 `UPDATE`）。
+- 处理：用 UI/API 改密，或按 6.6 直改 DB（注意 salt 按 ASCII 口径）；改完同步 values + `helm upgrade`。
 
 ---
 
