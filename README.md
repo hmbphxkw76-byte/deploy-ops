@@ -17,6 +17,7 @@
 | --- | --- | --- |
 | [linux-docker.md](linux-docker.md) | Linux（Ubuntu）/ Windows | 安装 Docker、镜像加速、空间清理（含验证脚本） |
 | [kali-docker.md](kali-docker.md) | Linux（Kali） | Kali / Debian 安装 Docker CE 与 Compose 插件 |
+| [kali-gitlab-runner.md](kali-gitlab-runner.md) | Linux（Kali） | 安装 GitLab Runner、注册到自建 GitLab 与流水线冒烟 |
 | [kali-cisco-ai-defense.md](kali-cisco-ai-defense.md) | Linux（Kali） | Cisco AI Defense 扫描工具集（mcp/skill/a2a-scanner、aibom） |
 | [linux-ollama.md](linux-ollama.md) | Linux（Ubuntu） | 部署 Ollama 离线包与 systemd 服务 |
 | [linux-npm.md](linux-npm.md) | Linux（Ubuntu） | Node.js（nvm）安装、npm 镜像配置与排障 |
@@ -26,6 +27,8 @@
 | [kubernetes-harbor-install.sh](kubernetes-harbor-install.sh) | Kubernetes（Ubuntu） | Harbor 一键安装脚本（前置检查 → 渲染校验 → 安装/升级 → 导出 CA → 验证，幂等） |
 | [kubernetes-gitlab.md](kubernetes-gitlab.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署极狐 GitLab（外置 PostgreSQL / Redis / MinIO，国内镜像源） |
 | [linux-gitlab.md](linux-gitlab.md) | Linux（Ubuntu） | 独立 Docker 部署 GitLab CE（不接入 K8s，国内镜像源） |
+| [kubernetes-argocd.md](kubernetes-argocd.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Argo CD（GitOps 持续交付，NodePort + 国内镜像源） |
+| [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → 验证，幂等） |
 
 ## 选型与决策记录
 
@@ -131,6 +134,16 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 
 预期行为：一键脚本幂等（已安装走 `helm upgrade`）；镜像保持 `docker.io` 由 containerd 镜像源加速；密码/密钥随机生成写入 values 文件（不提交仓库）；重启 containerd、卸载等破坏性操作必须先确认。
 
+### Argo CD（kubernetes-argocd.md）
+
+```text
+1. 部署：按 kubernetes-argocd.md 第 0 章用 kubernetes-argocd-install.sh 一键安装（NodePort + HTTP），执行前向我确认参数区参数。
+2. 接入：按第 6.3 节建 GitLab 仓库凭据 Secret，按第 6.4 节创建 root Application（app-of-apps）。
+3. 排障：应用一直 OutOfSync / SyncFailed，按第 8.3 节定位（repo server 日志 + 凭据 label）。
+```
+
+预期行为：quay.io 镜像走 containerd 镜像源；只用稳定版（拒装 rc/beta）；CI 只改 manifests、由 Argo CD 负责 sync；初始密码只从 Secret 读取，不写仓库。
+
 ### Ollama（linux-ollama.md）
 
 ```text
@@ -140,6 +153,18 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```
 
 ## 组合工作流示例
+
+### GitLab CI + Argo CD 交付闭环（~10 个应用）
+
+```text
+按顺序执行并逐步汇报：
+1. GitLab Runner：注册 Runner 并跑通一条最小流水线（构建 → push Harbor）
+2. kubernetes-argocd.md 第 0 章：安装 Argo CD（NodePort），验证 /api/health
+3. kubernetes-argocd.md 第 6.3/6.4 节：接入 GitLab 私有仓库凭据 + 创建 root Application（app-of-apps）
+4. 选一个应用试点：GitLab CI 更新 manifests 仓库的 image tag → Argo CD 自动 sync
+```
+
+预期行为：同一批 K8s 资源只由 Argo CD 管理（不再用 CI 里的 helm upgrade 并管）；root Application 加 finalizer；CI 侧不直接操作集群。
 
 ### 新 Ubuntu 服务器初始化
 

@@ -842,6 +842,25 @@ kubectl patch ns gitlab --type=merge -p '{"metadata":{"finalizers":[]}}'
 - `docker.1panel.live` 与 `docker.1ms.run` 在本机网络下不稳定，不建议作为唯一源。
 - 若 containerd 需要新的 registry 证书配置，可编辑 `/etc/containerd/certs.d/<registry>/hosts.toml` 后重启 containerd；重启会影响 Docker 容器，需先确认无关键业务。
 
+### 7.10 CI Job 一直 running：对象存储虚拟主机域名无法解析
+
+现象：Runner 日志反复出现 `Submitting job to coordinator...accepted, but not yet completed  code=202`；job 实际已执行成功（日志有 `Job succeeded`），但 GitLab 一直显示 `running`；Sidekiq 日志报 `Excon::Error::Socket: no address for gitlab-artifacts.minio.gitlab.svc.cluster.local`。
+
+原因：对象存储 connection 未启用路径风格，AWS SDK 生成 `gitlab-artifacts.minio.gitlab.svc.cluster.local`（bucket 子域名），集群内无法解析，trace chunk 无法落盘。
+
+处理：在 connection 中加 `path_style: true` 并重启组件（webservice 重启受 7.7 的 `hostPort` 约束，滚动更新卡住时先删旧 Pod）：
+
+```bash
+kubectl -n gitlab get secret gitlab-object-storage -o jsonpath='{.data.connection}' | base64 -d > /tmp/conn.yaml
+grep -q path_style /tmp/conn.yaml || echo 'path_style: true' >> /tmp/conn.yaml
+kubectl -n gitlab create secret generic gitlab-object-storage \
+  --from-file=connection=/tmp/conn.yaml --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n gitlab rollout restart deploy/gitlab-webservice-default deploy/gitlab-sidekiq-all-in-1-v2
+kubectl -n gitlab rollout status deploy/gitlab-webservice-default --timeout=420s
+```
+
+> 同步更新 `/root/gitlab-deploy/object-storage-connection.yaml`，避免下次重建 Secret 时丢失。端到端验证见 [kali-gitlab-runner.md](kali-gitlab-runner.md) 第 9 节。
+
 ---
 
 ## 8. Agent 注意事项
