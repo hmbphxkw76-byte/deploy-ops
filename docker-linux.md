@@ -361,7 +361,7 @@ Agent 判定规则：
 在任意支持 Agent 的 IDE（Trae、Qoder、WorkBuddy 等）中直接下达指令即可，例如：
 
 ```text
-按 linux/docker.md 第 4.1 章的快速验证脚本验证 Docker 部署，
+按 docker-linux.md 第 4.1 章的快速验证脚本验证 Docker 部署，
 从参数区读取 REGISTRY_MIRRORS 作为比对地址，执行后汇报结果与日志路径。
 ```
 
