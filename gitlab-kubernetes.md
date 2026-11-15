@@ -95,9 +95,22 @@ read -r -p "参数确认无误？[y/N] " ok
 - `kubectl -n gitlab get pods` 全部 `Running`/`Completed`，无长期 `CrashLoopBackOff`。
 - `/-/health`、`/-/readiness`、`/-/liveness` 返回 `200`。
 - `/users/sign_in` 返回 `200`，root 可登录并进入 `/dashboard/projects`。
+- 静态资源可访问：`/assets/webpack/*.js`、`/assets/application-*.css` 返回 `200`，且 `Content-Type` 正确；登录页 HTML 中存在 `user[login]`、`user[password]` 表单字段。
 - PostgreSQL `schema_migrations` 迁移完整，无失败 Job。
 - MinIO 7 个桶全部存在。
 - GitLab `gitlab.yml` 中 `object_store.enabled=true` 且 endpoint 正确。
+
+### 0.5.1 已知陷阱速查
+
+| 陷阱 | 现象 | 正确做法 |
+|---|---|---|
+| `hostPort` 映射到 Rails 8080 | 登录页停在 `Loading`，`/assets/*` 返回 302 到登录页 | `hostPort` 必须映射到 `gitlab-workhorse` 的 `8181`（见 3.8.1） |
+| PostgreSQL Service 被 Helm 删除 | GitLab 初始化报 DNS/连接失败 | 若曾安装过同名 Helm release，先重建 `postgresql` Service |
+| PostgreSQL 默认锁表不足 | 迁移报 `out of shared memory` / `max_locks_per_transaction` | 启动参数加 `-c max_locks_per_transaction=256` |
+| `gitlab.host` 写成 `IP:Port` | 迁移报 `bad component(expected host component)` | `gitlab.host` 只写 IP/域名，端口单独写 `gitlab.port` |
+| main/ci 数据库规则 | 迁移报数据库共享冲突 | `ci.databaseTasks=false` 时与 `main` 共用数据库；`true` 时必须独立库 |
+| 对象存储 Secret 缺失 | Pod 一直 `PodInitializing` | 先创建 `gitlab-object-storage` / `gitlab-registry-storage` / `gitlab-backup-storage` |
+| HPA 与 hostPort 冲突 | webservice 副本 Pending | HPA `maxReplicas` 固定为 1 |
 
 ### 0.6 复用安装脚本（文件就绪后直接执行）
 
@@ -140,9 +153,31 @@ helm upgrade --install gitlab gitlab-cn/gitlab \
   --timeout 900s
 
 # ---- 4. 安装后补丁（必需） ----
-kubectl -n "$GITLAB_NS" patch deployment gitlab-webservice-default --type=json -p '[
-  {"op":"add","path":"/spec/template/spec/containers/0/ports/0/hostPort","value":'"$GITLAB_PORT"'}
-]'
+export GITLAB_NS GITLAB_PORT
+python3 - <<'PY'
+import json, os, subprocess
+name = "gitlab-webservice-default"
+ns = os.environ["GITLAB_NS"]
+port = int(os.environ["GITLAB_PORT"])
+raw = subprocess.check_output(["kubectl", "-n", ns, "get", "deploy", name, "-o", "json"])
+obj = json.loads(raw)
+changed = False
+for c in obj["spec"]["template"]["spec"]["containers"]:
+    for p in c.get("ports", []):
+        if c["name"] == "webservice" and p.get("containerPort") == 8080 and "hostPort" in p:
+            p.pop("hostPort", None)
+            changed = True
+        if c["name"] == "gitlab-workhorse" and p.get("containerPort") == 8181:
+            if p.get("hostPort") != port:
+                p["hostPort"] = port
+                changed = True
+if changed:
+    subprocess.run(["kubectl", "-n", ns, "apply", "-f", "-"],
+                   input=json.dumps(obj).encode(), check=True)
+    print("patched webservice hostPort -> workhorse", port)
+else:
+    print("webservice hostPort already correct")
+PY
 kubectl -n "$GITLAB_NS" scale deploy gitlab-webservice-default --replicas=1
 kubectl -n "$GITLAB_NS" patch hpa gitlab-webservice-default -p '{"spec":{"minReplicas":1,"maxReplicas":1}}'
 
@@ -151,8 +186,9 @@ python3 - <<'PY'
 import json, os, subprocess, sys
 host = os.environ["CLUSTER_HOST"]
 port = os.environ["GITLAB_PORT"]
+ns = os.environ["GITLAB_NS"]
 for name in ["gitlab-webservice", "gitlab-sidekiq"]:
-    raw = subprocess.check_output(["kubectl", "-n", "gitlab", "get", "configmap", name, "-o", "json"])
+    raw = subprocess.check_output(["kubectl", "-n", ns, "get", "configmap", name, "-o", "json"])
     obj = json.loads(raw)
     key = "gitlab.yml.erb"
     text = obj["data"][key]
@@ -163,7 +199,7 @@ for name in ["gitlab-webservice", "gitlab-sidekiq"]:
             print("host line not found in", name, file=sys.stderr)
             sys.exit(1)
         obj["data"][key] = text.replace(old, new, 1)
-        subprocess.run(["kubectl", "-n", "gitlab", "apply", "-f", "-"],
+        subprocess.run(["kubectl", "-n", ns, "apply", "-f", "-"],
                        input=json.dumps(obj).encode(), check=True)
         print("patched", name)
 PY
@@ -177,6 +213,10 @@ for p in -/health -/readiness -/liveness; do
   curl -sS -o /dev/null -w 'http=%{http_code}\n' --max-time 10 "http://${CLUSTER_HOST}:${GITLAB_PORT}/$p"
 done
 curl -sS -L -o /dev/null -w 'login_page=%{http_code}\n' --max-time 20 "http://${CLUSTER_HOST}:${GITLAB_PORT}/users/sign_in"
+ASSET=$(curl -sS "http://${CLUSTER_HOST}:${GITLAB_PORT}/users/sign_in" | grep -o '/assets/webpack/runtime\.[^"]*\.bundle\.js' | head -1)
+if [[ -n "$ASSET" ]]; then
+  curl -sS -o /dev/null -w "asset=${ASSET} http=%{http_code} type=%{content_type}\n" --max-time 15 "http://${CLUSTER_HOST}:${GITLAB_PORT}${ASSET}"
+fi
 kubectl -n "$GITLAB_NS" get pods -o wide
 echo "GitLab URL: http://${CLUSTER_HOST}:${GITLAB_PORT}"
 ```
@@ -212,7 +252,7 @@ echo "GitLab URL: http://${CLUSTER_HOST}:${GITLAB_PORT}"
 2. **外置依赖**：GitLab 19 的 Chart 不再内置 PostgreSQL / Redis / MinIO，因此单独部署 PostgreSQL 17、Redis 8、MinIO。
 3. **镜像源**：PostgreSQL / Redis 使用 `docker.m.daocloud.io/library/...`；MinIO 官方镜像在 2025-10 后停止更新且国内镜像源不稳定，因此从 `dl.minio.org.cn` 下载二进制并基于已有本地镜像构建 `gitlab-minio:local`。
 4. **存储**：使用 `local-path-provisioner` 作为默认 StorageClass。单节点/双节点实验环境足够；生产环境建议换成 NFS/Ceph/Rook 等共享存储。
-5. **网络暴露**：宿主机 80 端口已被 `aivp-web-1` 占用，8080 端口已有 Docker GitLab 容器占用，因此 Kubernetes GitLab 使用 `hostPort: 30080`，并把 GitLab 的 `gitlab.host` 设为 `192.168.40.189`、`gitlab.port` 设为 `30080`。
+5. **网络暴露**：宿主机 80 端口已被 `aivp-web-1` 占用，8080 端口已有 Docker GitLab 容器占用，因此 Kubernetes GitLab 使用 `hostPort: 30080`，并把 GitLab 的 `gitlab.host` 设为 `192.168.40.189`、`gitlab.port` 设为 `30080`。`hostPort` 必须映射到 `gitlab-workhorse` 的 `8181`，不能映射到 Rails 的 `8080`，否则静态资源会被重定向到登录页，页面停在 `Loading`。
 6. **副本数**：`gitlab-webservice` 固定为 1 副本，避免 `hostPort` 冲突；HPA `gitlab-webservice-default` 的 `maxReplicas` 也固定为 1。
 
 ---
@@ -490,11 +530,24 @@ helm upgrade --install gitlab gitlab-cn/gitlab \
 
 ### 3.8 安装后补丁（必需）
 
-#### 3.8.1 为 GitLab Web 开放宿主机 30080
+#### 3.8.1 为 GitLab Web 开放宿主机 30080（必须映射到 workhorse 8181）
+
+GitLab Pod 内有两个容器：
+
+- `webservice`（Rails）：容器端口 `8080`
+- `gitlab-workhorse`：容器端口 `8181`
+
+静态资源（`/assets/*`）由 `gitlab-workhorse` 提供。如果把 `hostPort` 映射到 Rails 的 `8080`，浏览器能拿到 HTML，但 JS/CSS 会被 Rails 重定向到登录页，页面停在 `Loading`。因此必须把 `hostPort` 映射到 **workhorse 的 8181**：
 
 ```bash
+# 若之前误把 hostPort 加到了 Rails 8080，先移除
 kubectl -n gitlab patch deployment gitlab-webservice-default --type=json -p '[
-  {"op":"add","path":"/spec/template/spec/containers/0/ports/0/hostPort","value":30080}
+  {"op":"remove","path":"/spec/template/spec/containers/0/ports/0/hostPort"}
+]' || true
+
+# 正确：把 30080 映射到 workhorse 8181（containers/1）
+kubectl -n gitlab patch deployment gitlab-webservice-default --type=json -p '[
+  {"op":"add","path":"/spec/template/spec/containers/1/ports/0/hostPort","value":30080}
 ]'
 ```
 
@@ -549,8 +602,18 @@ for p in -/health -/readiness -/liveness; do
 done
 
 echo "== login page =="
-curl -sS -L -o /dev/null -w 'http=%{http_code} final=%{url_effective}\n' \
+curl -sS -L -o /tmp/gitlab-login-check.html -w 'http=%{http_code} final=%{url_effective}\n' \
   --max-time 20 "http://192.168.40.189:30080/users/sign_in"
+grep -q 'user\[login\]' /tmp/gitlab-login-check.html && echo "login_form=ok" || echo "login_form=missing"
+
+echo "== static assets =="
+ASSET=$(grep -o '/assets/webpack/runtime\.[^"]*\.bundle\.js' /tmp/gitlab-login-check.html | head -1)
+if [[ -n "$ASSET" ]]; then
+  curl -sS -o /dev/null -w "asset=${ASSET} http=%{http_code} type=%{content_type}\n" \
+    --max-time 15 "http://192.168.40.189:30080${ASSET}"
+else
+  echo "asset=not_found"
+fi
 
 echo "== root password =="
 kubectl -n gitlab get secret gitlab-gitlab-initial-root-password \
@@ -596,7 +659,8 @@ grep -o '<title>[^<]*</title>' /tmp/gitlab-home.html | head -1
 - `http://192.168.40.189:30080/-/health`：200
 - `/-/readiness`：200
 - `/-/liveness`：200
-- `http://192.168.40.189:30080/users/sign_in`：200
+- `http://192.168.40.189:30080/users/sign_in`：200，HTML 含 `user[login]` / `user[password]`
+- `/assets/webpack/runtime.*.bundle.js`：`200 application/javascript`（确认 `hostPort` 指向 workhorse 8181）
 - root 登录后跳转到 `/dashboard/projects`，页面标题 `Projects · JiHu GitLab`
 - PostgreSQL 数据库迁移完成，`schema_migrations` 记录数 1396
 - MinIO 桶：`git-lfs`、`gitlab-artifacts`、`gitlab-backups`、`gitlab-packages`、`gitlab-registry`、`gitlab-tmp`、`gitlab-uploads`
@@ -732,6 +796,32 @@ kubectl -n gitlab delete pod -l app=webservice --force --grace-period=0
 ```bash
 kubectl -n gitlab scale deploy gitlab-webservice-default --replicas=1
 kubectl -n gitlab patch hpa gitlab-webservice-default -p '{"spec":{"minReplicas":1,"maxReplicas":1}}'
+```
+
+### 7.7.1 登录页停在 `Loading`，静态资源返回 302
+
+现象：`/users/sign_in` 返回 200，但浏览器页面只有 `JiHu GitLab` + `Loading`；`/assets/webpack/*.js`、`/assets/application-*.css` 返回 `302` 并跳转到 `/users/sign_in`。
+
+原因：`hostPort` 映射到了 Rails 的 `8080`，而静态资源由 `gitlab-workhorse` 的 `8181` 提供。
+
+处理：按第 3.8.1 节把 `hostPort` 从 `containers/0`（Rails 8080）移除，并加到 `containers/1`（workhorse 8181），然后删除旧 Pod 让端口释放：
+
+```bash
+kubectl -n gitlab patch deployment gitlab-webservice-default --type=json -p '[
+  {"op":"remove","path":"/spec/template/spec/containers/0/ports/0/hostPort"}
+]' || true
+kubectl -n gitlab patch deployment gitlab-webservice-default --type=json -p '[
+  {"op":"add","path":"/spec/template/spec/containers/1/ports/0/hostPort","value":30080}
+]'
+kubectl -n gitlab delete pod -l app=webservice --force --grace-period=0
+```
+
+验证：
+
+```bash
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' \
+  http://192.168.40.189:30080/assets/webpack/runtime.29cd8b8f.bundle.js
+# 期望：200 application/javascript
 ```
 
 ### 7.8 命名空间一直 Terminating
