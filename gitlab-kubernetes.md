@@ -6,6 +6,185 @@
 
 ---
 
+## 0. 复用指南（先读这里）
+
+本节面向后续重复安装与迁移。首次部署、升级或在新集群复用时，只修改下面的参数区，然后按第 3 章顺序执行即可。
+
+### 0.1 参数区
+
+```bash
+# ---- 目标集群与节点 ----
+NODE_NAME="ubuntu"                 # GitLab 主组件固定调度的节点名
+CLUSTER_HOST="192.168.40.189"     # 集群对外 IP
+
+# ---- GitLab 访问 ----
+GITLAB_NS="gitlab"
+GITLAB_PORT="30080"              # 宿主机 hostPort，需避开 80/8080/22/6443 等
+GITLAB_URL="http://${CLUSTER_HOST}:${GITLAB_PORT}"
+
+# ---- 版本 ----
+GITLAB_VERSION="19.5.5"          # 极狐 GitLab 应用版本
+CHART_VERSION="10.5.6"            # gitlab-cn/gitlab Chart 版本
+POSTGRES_IMAGE="docker.m.daocloud.io/library/postgres:17-bookworm"
+REDIS_IMAGE="docker.m.daocloud.io/library/redis:8-bookworm"
+
+# ---- 工作目录 ----
+WORK_DIR="/root/gitlab-deploy"
+```
+
+> 复用原则：标准配置进入 Helm values；必要的安装后补丁集中记录在第 3.8 节，升级后必须重放。不要临时手改集群对象而不回写文档。
+
+### 0.2 前置检查（一键执行）
+
+```bash
+set -euo pipefail
+
+# 1) 集群与节点
+kubectl get nodes -o wide
+kubectl get sc
+
+# 2) Helm 版本（建议 3.18+）
+helm version --short
+
+# 3) 端口冲突检查：30080 必须可用
+if ss -ltnp | grep -q ':30080\b'; then
+  echo "ERROR: 30080 已被占用" >&2
+  exit 1
+fi
+
+# 4) 镜像源连通性
+for u in \
+  https://registry.gitlab.cn/v2/ \
+  https://docker.m.daocloud.io/v2/ \
+  https://dl.minio.org.cn/server/minio/release/linux-amd64/minio; do
+  code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 15 "$u" || true)
+  echo "$u -> $code"
+done
+
+# 5) 确认参数
+echo "NODE_NAME=$NODE_NAME CLUSTER_HOST=$CLUSTER_HOST GITLAB_PORT=$GITLAB_PORT"
+read -r -p "参数确认无误？[y/N] " ok
+[[ "$ok" =~ ^[Yy]$ ]] || exit 1
+```
+
+### 0.3 复用步骤（按顺序执行）
+
+1. **安装 local-path-provisioner**：第 3.1 节。
+2. **准备密码与依赖清单**：第 3.2 节。密码必须随机生成，禁止写入 Git。
+3. **构建 MinIO 本地镜像**：第 3.3 节。若已有 `gitlab-minio:local` 可跳过。
+4. **部署 PostgreSQL / Redis / MinIO**：第 3.4 节。PostgreSQL 必须带 `max_locks_per_transaction=256`。
+5. **准备 GitLab values 与对象存储 Secret**：第 3.5、3.6 节。
+6. **安装 / 升级 GitLab**：第 3.7 节。
+7. **执行安装后补丁**：第 3.8 节。这一步是复用成败关键，不能跳过。
+8. **验收**：第 4 章。健康检查、root 登录、MinIO 桶、对象存储配置全部通过后才算完成。
+
+### 0.4 最佳实践清单
+
+- **版本固定**：`global.gitlabVersion` 与 Chart 版本同时固定，不用 `latest`；升级前先看 Chart release notes。
+- **镜像国内源优先**：GitLab 用 `registry.gitlab.cn/cng-images`；PostgreSQL / Redis 用 `docker.m.daocloud.io/library`；MinIO 用 `dl.minio.org.cn` 二进制。
+- **依赖外置**：PostgreSQL 17、Redis 8、MinIO 独立部署，避免使用 Chart 外部默认值或嵌入式数据库。
+- **存储声明**：所有有状态组件使用 `local-path` 并固定容量；生产环境替换为共享存储。
+- **密码随机化**：PostgreSQL / Redis / MinIO / GitLab root 全部随机生成，保存到 Secret 或本地 `.secrets`，不入库。
+- **副本最小化**：实验环境 webservice 固定 1 副本，避免 `hostPort` 冲突；生产环境去掉 `hostPort`，改用 Ingress/LoadBalancer。
+- **HPA 与 hostPort 冲突**：使用 `hostPort` 时必须把对应 HPA 的 `maxReplicas` 固定为 1。
+- **配置与补丁分离**：Chart values 负责标准配置；`hostPort`、ConfigMap 端口等补丁集中记录，升级后重放。
+- **先验证后交付**：健康检查、root 登录、对象存储、MinIO 桶、迁移状态全部通过后才交付。
+
+### 0.5 验收标准
+
+- `kubectl -n gitlab get pods` 全部 `Running`/`Completed`，无长期 `CrashLoopBackOff`。
+- `/-/health`、`/-/readiness`、`/-/liveness` 返回 `200`。
+- `/users/sign_in` 返回 `200`，root 可登录并进入 `/dashboard/projects`。
+- PostgreSQL `schema_migrations` 迁移完整，无失败 Job。
+- MinIO 7 个桶全部存在。
+- GitLab `gitlab.yml` 中 `object_store.enabled=true` 且 endpoint 正确。
+
+### 0.6 复用安装脚本（文件就绪后直接执行）
+
+前提：`/root/gitlab-deploy/` 下已存在 `dependencies.yaml`、`gitlab-values.yaml`、对象存储连接文件与 MinIO 本地镜像。首次部署按第 3 章生成这些文件；之后重新安装、修复或升级可直接运行本脚本。
+
+```bash
+set -euo pipefail
+
+# ---- 参数 ----
+GITLAB_NS="gitlab"
+NODE_NAME="ubuntu"
+CLUSTER_HOST="192.168.40.189"
+GITLAB_PORT="30080"
+CHART_VERSION="10.5.6"
+WORK_DIR="/root/gitlab-deploy"
+
+# ---- 1. 存储 ----
+if ! kubectl get sc local-path >/dev/null 2>&1; then
+  curl -fsSL https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml -o /tmp/local-path-storage.yaml
+  sed -i 's#image: rancher/local-path-provisioner:v0.0.31#image: docker.m.daocloud.io/rancher/local-path-provisioner:v0.0.31#' /tmp/local-path-storage.yaml
+  kubectl apply -f /tmp/local-path-storage.yaml
+  kubectl -n local-path-storage rollout status deploy/local-path-provisioner --timeout=180s
+fi
+kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}' >/dev/null 2>&1 || true
+
+# ---- 2. 依赖 ----
+kubectl create namespace "$GITLAB_NS" --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n "$GITLAB_NS" apply -f "$WORK_DIR/manifests/dependencies.yaml"
+kubectl -n "$GITLAB_NS" wait --for=condition=ready pod -l app=postgresql --timeout=300s
+kubectl -n "$GITLAB_NS" wait --for=condition=ready pod -l app=redis-master --timeout=300s
+kubectl -n "$GITLAB_NS" wait --for=condition=ready pod -l app=minio --timeout=300s
+
+# ---- 3. GitLab ----
+helm repo add gitlab-cn https://charts.gitlab.cn/ >/dev/null 2>&1 || true
+helm repo update gitlab-cn >/dev/null 2>&1 || true
+helm upgrade --install gitlab gitlab-cn/gitlab \
+  --version "$CHART_VERSION" \
+  -n "$GITLAB_NS" \
+  -f "$WORK_DIR/gitlab-values.yaml" \
+  --timeout 900s
+
+# ---- 4. 安装后补丁（必需） ----
+kubectl -n "$GITLAB_NS" patch deployment gitlab-webservice-default --type=json -p '[
+  {"op":"add","path":"/spec/template/spec/containers/0/ports/0/hostPort","value":'"$GITLAB_PORT"'}
+]'
+kubectl -n "$GITLAB_NS" scale deploy gitlab-webservice-default --replicas=1
+kubectl -n "$GITLAB_NS" patch hpa gitlab-webservice-default -p '{"spec":{"minReplicas":1,"maxReplicas":1}}'
+
+export CLUSTER_HOST GITLAB_PORT
+python3 - <<'PY'
+import json, os, subprocess, sys
+host = os.environ["CLUSTER_HOST"]
+port = os.environ["GITLAB_PORT"]
+for name in ["gitlab-webservice", "gitlab-sidekiq"]:
+    raw = subprocess.check_output(["kubectl", "-n", "gitlab", "get", "configmap", name, "-o", "json"])
+    obj = json.loads(raw)
+    key = "gitlab.yml.erb"
+    text = obj["data"][key]
+    old = f"  gitlab:\n    host: {host}\n"
+    new = f"  gitlab:\n    host: {host}\n    port: {port}\n"
+    if f"    port: {port}\n" not in text:
+        if old not in text:
+            print("host line not found in", name, file=sys.stderr)
+            sys.exit(1)
+        obj["data"][key] = text.replace(old, new, 1)
+        subprocess.run(["kubectl", "-n", "gitlab", "apply", "-f", "-"],
+                       input=json.dumps(obj).encode(), check=True)
+        print("patched", name)
+PY
+
+kubectl -n "$GITLAB_NS" delete pod -l app=webservice --force --grace-period=0 >/dev/null 2>&1 || true
+kubectl -n "$GITLAB_NS" delete pod -l app=sidekiq --force --grace-period=0 >/dev/null 2>&1 || true
+
+# ---- 5. 验证 ----
+for p in -/health -/readiness -/liveness; do
+  printf '%s ' "$p"
+  curl -sS -o /dev/null -w 'http=%{http_code}\n' --max-time 10 "http://${CLUSTER_HOST}:${GITLAB_PORT}/$p"
+done
+curl -sS -L -o /dev/null -w 'login_page=%{http_code}\n' --max-time 20 "http://${CLUSTER_HOST}:${GITLAB_PORT}/users/sign_in"
+kubectl -n "$GITLAB_NS" get pods -o wide
+echo "GitLab URL: http://${CLUSTER_HOST}:${GITLAB_PORT}"
+```
+
+> 该脚本为幂等设计：已存在的 StorageClass、Secret、Deployment、Helm release 都会复用或升级；安装后补丁会重复执行，确保漂移被纠正。
+
+---
+
 ## 1. 最终架构
 
 | 组件 | 版本 | 部署方式 | 存储 | 备注 |
@@ -605,6 +784,57 @@ kubectl delete ns gitlab
 # 4. 可选：移除 local-path-provisioner
 kubectl delete -f /tmp/local-path-storage.yaml
 ```
+
+---
+
+## 10. 升级、备份与复用迁移
+
+### 10.1 升级 GitLab 版本
+
+1. 备份 PostgreSQL、Gitaly PVC、MinIO 桶与 GitLab 配置。
+2. 查询目标 Chart 版本与应用版本：
+
+```bash
+helm search repo gitlab-cn/gitlab --versions | head
+```
+
+3. 更新 `gitlab-values.yaml` 中的 `global.gitlabVersion`，确认 Chart 版本。
+4. 执行 `helm upgrade`：
+
+```bash
+helm upgrade --install gitlab gitlab-cn/gitlab \
+  --version <CHART_VERSION> \
+  -n gitlab \
+  -f /root/gitlab-deploy/gitlab-values.yaml \
+  --timeout 900s
+```
+
+5. **升级后必须重放第 3.8 节补丁**，否则 `hostPort`、HPA、端口配置会被 Chart 默认值覆盖。
+6. 升级后重新执行第 4 章验收。
+
+### 10.2 备份
+
+- PostgreSQL：使用 `pg_dump` 或存储快照。
+- Gitaly：备份 `repo-data-gitlab-gitaly-0` PVC。
+- MinIO：使用 `mc mirror` 备份 7 个桶。
+- GitLab 配置：导出 `gitlab-rails-secret`、`gitlab-postgres`、`gitlab-redis`、`gitlab-object-storage`、`gitlab-backup-storage`。
+- 建议至少每周备份一次，并在升级前做一次全量备份。
+
+### 10.3 迁移到新集群
+
+1. 在新集群执行第 3.1 节安装 local-path。
+2. 执行第 3.2、3.3 节准备依赖与 MinIO 镜像。
+3. 部署 PostgreSQL / Redis / MinIO，并恢复数据。
+4. 执行第 3.5、3.6、3.7 节安装 GitLab。
+5. 执行第 3.8 节补丁。
+6. 执行第 4 章验收。
+7. 切换 DNS / 负载均衡到新集群地址。
+
+### 10.4 回滚
+
+- GitLab 应用回滚：`helm rollback gitlab <REVISION> -n gitlab`，然后重放第 3.8 节补丁。
+- 数据库回滚：从备份恢复 `gitlabhq_production`；不要在数据库版本不匹配时直接回滚应用。
+- 若 `hostPort` 或端口变更，确认新端口未被占用。
 
 ---
 
