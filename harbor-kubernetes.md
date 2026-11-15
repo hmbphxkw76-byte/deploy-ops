@@ -4,7 +4,7 @@
 
 本文档面向任意 AI IDE 或 AI Agent，用于在 **Kubernetes 集群** 上以 **Helm Chart** 部署 **Harbor**（私有 OCI 镜像仓库），并优先使用**国内镜像源**拉取镜像。文档汇总了 2026-11-15 在真实集群上的完整安装经验与踩坑，**可直接照装**：
 
-- **最快路径**：用 [harbor-install-kubernetes.sh](harbor-install-kubernetes.sh) 一键安装（第 0 章），一条命令完成前置检查 → 生成 values → 渲染校验 → 安装/升级 → 等待就绪 → 导出 CA → 验证 → 打印账号密码。
+- **最快路径**：用 [harbor-kubernetes-install.sh](harbor-kubernetes-install.sh) 一键安装（第 0 章），一条命令完成前置检查 → 生成 values → 渲染校验 → 安装/升级 → 等待就绪 → 导出 CA → 验证 → 打印账号密码。
 - **手动路径**：第 1～6 章分步说明，便于排障与二次开发。
 - **经验总结**：第 7 章集中列出最佳实践与踩坑，换环境复用时先看这一章。
 
@@ -21,8 +21,8 @@
 ### 0.1 用法
 
 ```bash
-# 把 harbor-install-kubernetes.sh 放到集群可执行节点（如 control-plane），然后：
-NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-install-kubernetes.sh
+# 把 harbor-kubernetes-install.sh 放到集群可执行节点（如 control-plane），然后：
+NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-kubernetes-install.sh
 ```
 
 常用覆盖项：
@@ -31,23 +31,23 @@ NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-install-kubernetes.sh
 HARBOR_VERSION=v2.15.4 TRIVY_ENABLED=true \
 STORAGE_CLASS=local-path REGISTRY_SIZE=50Gi \
 ADMIN_PASSWORD='固定密码' SECRET_KEY='固定密钥' \
-bash harbor-install-kubernetes.sh
+bash harbor-kubernetes-install.sh
 ```
 
 - `NODE_IP` 必填（无默认值）；其余均有默认值，见第 1 章参数区。
 - 不传 `ADMIN_PASSWORD` / `SECRET_KEY` 时**随机生成**（脚本末尾打印）。
 - **幂等**：已安装则自动走 `helm upgrade`，可重复执行。
 
-### 0.2 脚本（harbor-install-kubernetes.sh）
+### 0.2 脚本（harbor-kubernetes-install.sh）
 
 ```bash
 #!/bin/bash
 # Harbor on Kubernetes 一键安装（NodePort + 自签 HTTPS + 国内镜像源）
 # 用法:
-#   NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-install-kubernetes.sh
-#   HARBOR_VERSION=v2.15.4 TRIVY_ENABLED=true bash harbor-install-kubernetes.sh
-#   ADMIN_PASSWORD='固定密码' SECRET_KEY='固定密钥' bash harbor-install-kubernetes.sh   # 不传则随机生成
-#   VALUES_FILE=/root/harbor-values.yaml bash harbor-install-kubernetes.sh
+#   NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-kubernetes-install.sh
+#   HARBOR_VERSION=v2.15.4 TRIVY_ENABLED=true bash harbor-kubernetes-install.sh
+#   ADMIN_PASSWORD='固定密码' SECRET_KEY='固定密钥' bash harbor-kubernetes-install.sh   # 不传则随机生成
+#   VALUES_FILE=/root/harbor-values.yaml bash harbor-kubernetes-install.sh
 # 说明: 幂等。已安装则走 helm upgrade；脚本末尾打印访问地址 / 账号 / 密码 / CA 路径。
 # 退出码: 0=成功, 1=失败
 set -euo pipefail
@@ -103,7 +103,7 @@ log "生成 values: $VALUES_FILE"
 ns_flow() { [ -n "$PIN_NODE" ] && echo ", nodeSelector: { kubernetes.io/hostname: $PIN_NODE }" || echo ""; }
 {
 cat <<EOF
-# 由 harbor-install-kubernetes.sh 生成
+# 由 harbor-kubernetes-install.sh 生成
 expose:
   type: nodePort
   tls:
@@ -651,7 +651,7 @@ trivy:
 
 - **先检查再执行**：第 2 章全只读；`helm -n harbor list` 有记录就走 `upgrade`，不要重复 `install`。
 - **参数先确认**：执行前向用户确认第 1 章参数（尤其 `NODE_IP`、`PIN_NODE`、`ADMIN_PASSWORD`、`TRIVY_ENABLED`）。
-- **优先用一键脚本**：`harbor-install-kubernetes.sh` 已封装检查/校验/安装/验证全流程；手动分步用于排障。
+- **优先用一键脚本**：`harbor-kubernetes-install.sh` 已封装检查/校验/安装/验证全流程；手动分步用于排障。
 - **密码与密钥**：`harborAdminPassword` / `secretKey` 必须随机生成，写入 values 文件且**不要提交仓库**（本仓库用 `.tmp-` 前缀）；汇报时告知用户密码位置。
 - **危险操作必须确认**：`systemctl restart containerd`（影响 Docker 业务容器）、`helm uninstall`、删除 PVC/项目，逐项征求同意。
 - **YAML 重复键**：values 中同一键只能出现一次（尤其 `trivy`），改完用 `helm template` 核对渲染结果。

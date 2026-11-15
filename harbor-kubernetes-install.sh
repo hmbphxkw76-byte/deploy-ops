@@ -1,10 +1,10 @@
 #!/bin/bash
 # Harbor on Kubernetes 一键安装（NodePort + 自签 HTTPS + 国内镜像源）
 # 用法:
-#   NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-install-kubernetes.sh
-#   HARBOR_VERSION=v2.15.4 TRIVY_ENABLED=true bash harbor-install-kubernetes.sh
-#   ADMIN_PASSWORD='固定密码' SECRET_KEY='固定密钥' bash harbor-install-kubernetes.sh   # 不传则随机生成
-#   VALUES_FILE=/root/harbor-values.yaml bash harbor-install-kubernetes.sh
+#   NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash harbor-kubernetes-install.sh
+#   HARBOR_VERSION=v2.15.4 TRIVY_ENABLED=true bash harbor-kubernetes-install.sh
+#   ADMIN_PASSWORD='固定密码' SECRET_KEY='固定密钥' bash harbor-kubernetes-install.sh   # 不传则随机生成
+#   VALUES_FILE=/root/harbor-values.yaml bash harbor-kubernetes-install.sh
 # 说明: 幂等。已安装则走 helm upgrade；脚本末尾打印访问地址 / 账号 / 密码 / CA 路径。
 # 退出码: 0=成功, 1=失败
 set -euo pipefail
@@ -60,7 +60,7 @@ log "生成 values: $VALUES_FILE"
 ns_flow() { [ -n "$PIN_NODE" ] && echo ", nodeSelector: { kubernetes.io/hostname: $PIN_NODE }" || echo ""; }
 {
 cat <<EOF
-# 由 harbor-install-kubernetes.sh 生成
+# 由 harbor-kubernetes-install.sh 生成
 expose:
   type: nodePort
   tls:

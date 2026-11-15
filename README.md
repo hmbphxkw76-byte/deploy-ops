@@ -22,7 +22,7 @@
 | [promptfoo-linux.md](promptfoo-linux.md) | Linux（Ubuntu） | Promptfoo 安装与红队测试 |
 | [kubernetes-linux.md](kubernetes-linux.md) | Linux（Ubuntu） | 单节点 Kubernetes（kubeadm + containerd + flannel）部署、验证与排障 |
 | [harbor-kubernetes.md](harbor-kubernetes.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Harbor 私有镜像仓库（NodePort / 自签 HTTPS / 国内镜像源） |
-| [harbor-install-kubernetes.sh](harbor-install-kubernetes.sh) | Kubernetes（Ubuntu） | Harbor 一键安装脚本（前置检查 → 渲染校验 → 安装/升级 → 导出 CA → 验证，幂等） |
+| [harbor-kubernetes-install.sh](harbor-kubernetes-install.sh) | Kubernetes（Ubuntu） | Harbor 一键安装脚本（前置检查 → 渲染校验 → 安装/升级 → 导出 CA → 验证，幂等） |
 | [gitlab-linux.md](gitlab-linux.md) | Linux（Ubuntu） | 独立 Docker 部署 GitLab CE（不接入 K8s，国内镜像源） |
 
 ## 选型与决策记录
@@ -121,7 +121,7 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ### Harbor（harbor-kubernetes.md）
 
 ```text
-1. 部署：按 harbor-kubernetes.md 第 0 章用 harbor-install-kubernetes.sh 一键安装（NodePort + 自签 HTTPS，镜像走国内源），执行前向我确认参数区参数。
+1. 部署：按 harbor-kubernetes.md 第 0 章用 harbor-kubernetes-install.sh 一键安装（NodePort + 自签 HTTPS，镜像走国内源），执行前向我确认参数区参数。
 2. 验证：脚本已自动导出 CA；再按 harbor-kubernetes.md 第 6.4 章运行 harbor_verify.sh 并汇报结果。
 3. 使用：建项目后 docker login/push/pull；让集群从 Harbor 拉镜像按第 6.5 章配置。
 4. 排障：Pod 起不来 / ImagePullBackOff / 证书报错，按 harbor-kubernetes.md 第 8 章定位。
