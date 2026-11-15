@@ -27,6 +27,12 @@ KUBECONFIG="${KUBECONFIG:-/root/.kube/config}"
 VALUES_FILE="${VALUES_FILE:-/tmp/argocd-values.yaml}"
 REDIS_IMAGE_REPO="${REDIS_IMAGE_REPO:-docker.m.daocloud.io/library/redis}"
 REDIS_IMAGE_TAG="${REDIS_IMAGE_TAG:-8.6.4-alpine}"
+# TLS: ca（自建 CA 签名，推荐）| selfsigned（Argo CD 自签）| insecure（明文 HTTP，仅临时）
+TLS_MODE="${TLS_MODE:-ca}"
+TLS_DIR="${TLS_DIR:-/root/argocd-deploy/tls}"
+TLS_CN="${TLS_CN:-argocd.lan}"
+TLS_SAN="${TLS_SAN:-DNS:argocd.lan,DNS:localhost,IP:${NODE_IP}}"
+INSTALL_CA="${INSTALL_CA:-0}"          # 1 = 把自建 CA 装入本机系统信任库（update-ca-certificates）
 # 可选：声明式登记 Git 仓库凭据（推荐，见手册 6.3；留空则不写）
 GITLAB_REPO_URL="${GITLAB_REPO_URL:-}"
 GITLAB_REPO_USER="${GITLAB_REPO_USER:-}"
@@ -192,9 +198,17 @@ redis-ha:
   enabled: false                 # chart 默认即 false；显式声明，避免误开 HA 子 chart
 
 configs:
-  params:
-    server.insecure: true        # 注意：v10 chart 用 configs.params，不是 server.insecure
+  params: {}
 EOF
+if [ "$TLS_MODE" = "insecure" ]; then
+  # 仅临时使用：明文 HTTP（注意 v10 chart 的键路径是 configs.params）
+  python3 - "$VALUES_FILE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("configs:\n  params: {}\n", "configs:\n  params:\n    server.insecure: true\n")
+open(p, "w").write(s)
+PY
+fi
 if [ -n "$GITLAB_REPO_URL" ]; then
 cat <<EOF
   repositories:
@@ -216,8 +230,10 @@ grep -q "image: quay.io/argoproj/argocd:${ARGOCD_VERSION}" /tmp/argocd-rendered.
   || die "渲染出的 argocd 镜像 tag 不是 ${ARGOCD_VERSION}（chart 与 app 版本不匹配，见第 3.2 节）"
 grep -q 'kind: StatefulSet' /tmp/argocd-rendered.yaml \
   || die "渲染结果缺少 StatefulSet（application-controller）"
-grep -q 'server.insecure: "true"' /tmp/argocd-rendered.yaml \
-  || die "渲染结果未启用 server.insecure（检查 configs.params 写法）"
+if [ "$TLS_MODE" != "insecure" ]; then
+  grep -q 'server.insecure: "true"' /tmp/argocd-rendered.yaml \
+    && die "TLS 模式下不应启用 server.insecure（检查 configs.params）"
+fi
 # ⚠️ 重复 YAML 键会被 helm 静默取最后一个（曾导致 server.service 丢失、NodePort 消失）
 grep -q "nodePort: ${NODEPORT_HTTP}" /tmp/argocd-rendered.yaml \
   || die "渲染结果缺少 nodePort ${NODEPORT_HTTP}（检查 values 是否有重复键）"
@@ -245,15 +261,51 @@ kubectl -n "$NAMESPACE" rollout status statefulset/argocd-application-controller
   || log "警告: statefulset/argocd-application-controller 未在超时内就绪"
 kubectl -n "$NAMESPACE" get pods -o wide
 
-# ---------------- 8. 验证 ----------------
+# ---------------- 8. TLS（可选）----------------
+SCHEME=https; BASE_URL="${TLS_CN}:${NODEPORT_HTTPS}"
+if [ "$TLS_MODE" != "insecure" ]; then
+  log "配置 TLS（模式: ${TLS_MODE}）"
+  mkdir -p "$TLS_DIR"; cd "$TLS_DIR"
+  if [ "$TLS_MODE" = "ca" ] && [ ! -s tls.crt ]; then
+    log "生成自建 CA 与服务器证书（SAN: ${TLS_SAN}）"
+    openssl genrsa -out ca.key 2048 2>/dev/null
+    openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -subj "/O=Lab/CN=Lab Argo CD CA" -out ca.crt 2>/dev/null
+    openssl genrsa -out tls.key 2048 2>/dev/null
+    openssl req -new -key tls.key -subj "/O=Lab/CN=${TLS_CN}" -out tls.csr 2>/dev/null
+    printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth\n' "$TLS_SAN" > san.cnf
+    openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out tls.crt -days 825 -sha256 -extfile san.cnf 2>/dev/null
+  fi
+  if [ -s tls.crt ] && [ -s tls.key ]; then
+    python3 - "$TLS_DIR" <<'PY'
+import base64, json, subprocess, sys
+d = sys.argv[1]
+crt = base64.b64encode(open(f"{d}/tls.crt", "rb").read()).decode()
+key = base64.b64encode(open(f"{d}/tls.key", "rb").read()).decode()
+subprocess.run(["kubectl", "-n", "argocd", "patch", "secret", "argocd-secret", "--type", "merge",
+                "-p", json.dumps({"data": {"tls.crt": crt, "tls.key": key}})], check=True)
+PY
+    kubectl -n "$NAMESPACE" rollout restart deploy/argocd-server >/dev/null
+    kubectl -n "$NAMESPACE" rollout status deploy/argocd-server --timeout=300s >/dev/null 2>&1 || log "警告: server 重启超时"
+    if [ "$INSTALL_CA" = "1" ] && [ -s ca.crt ]; then
+      cp ca.crt /usr/local/share/ca-certificates/lab-argocd-ca.crt
+      update-ca-certificates >/dev/null 2>&1 && log "已将 CA 装入系统信任库"
+    fi
+  else
+    log "未提供 tls.crt/tls.key → 使用 Argo CD 自签证书（客户端需跳过校验）"
+  fi
+else
+  SCHEME=http; BASE_URL="${NODE_IP}:${NODEPORT_HTTP}"
+fi
+
+# ---------------- 9. 验证 ----------------
 log "验证服务"
 sleep 5
-# 注意：Argo CD 3.x 的健康检查端点是 /healthz（/api/health 已 404）
-CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://${NODE_IP}:${NODEPORT_HTTP}/healthz" || echo 000)
+# 注意：Argo CD 3.x 的健康检查端点是 /healthz（/api/health 已 404）；TLS 模式下正文 ok
+CODE=$(curl -sk -o /dev/null -w '%{http_code}' "${SCHEME}://${NODE_IP}:${NODEPORT_HTTPS}/healthz" || echo 000)
+[ "$CODE" = "200" ] || CODE=$(curl -sk -o /dev/null -w '%{http_code}' "${SCHEME}://${NODE_IP}:${NODEPORT_HTTP}/healthz" || echo 000)
 [ "$CODE" = "200" ] || log "警告: /healthz 返回 ${CODE}（可能仍在启动）"
-BODY=$(curl -s "http://${NODE_IP}:${NODEPORT_HTTP}/healthz" || true)
+BODY=$(curl -sk "${SCHEME}://${NODE_IP}:${NODEPORT_HTTPS}/healthz" || true)
 echo "healthz: ${BODY}"
-# 实测 3.x 的 /healthz 返回 200 + 正文 ok（不是 {"status":"healthy"}）
 echo "$BODY" | grep -q '^ok$' || log "警告: healthz 未返回 ok"
 
 # ---------------- 9. 结果 ----------------
@@ -262,12 +314,13 @@ ADMIN_PASS=$(kubectl -n "$NAMESPACE" get secret argocd-initial-admin-secret \
 cat <<EOF
 
 ================ Argo CD 安装完成 ================
-地址:   http://${NODE_IP}:${NODEPORT_HTTP}        # 注意用 http（server.insecure=true）
+地址:   ${SCHEME}://${NODE_IP}:${NODEPORT_HTTPS}        # TLS 模式: https（自建 CA 签名）
 账号:   admin
 密码:   ${ADMIN_PASS}
 版本:   ${ARGOCD_VERSION}（chart ${CHART_VERSION}，来源 ${CHART_SOURCE}）
 values: ${VALUES_FILE}
-CLI:    argocd login ${NODE_IP}:${NODEPORT_HTTP} --plaintext --username admin --password '${ADMIN_PASS}'
+CA 证书: ${TLS_DIR}/ca.crt    # 客户端导入后不再告警（未导入则用 --insecure）
+CLI:    argocd login ${NODE_IP}:${NODEPORT_HTTPS} --username admin --password '${ADMIN_PASS}'   # 已导入 CA 时无需 --insecure
 CLI 二进制（GitHub Releases，建议走国内代理）:
   curl -sL -o argocd https://ghfast.top/https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64
   chmod +x argocd && ./argocd version --client   # 必须能打印版本，否则是截断文件

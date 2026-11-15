@@ -6,7 +6,7 @@
 
 **为什么选 Argo CD（本仓库的决策）**：应用规模约 10 个，需要**漂移检测/自愈、版本树回滚、部署审计与可视化**，且 GitLab CI 已承担构建（CI）——按职责拆分，构建归 GitLab CI，部署归 Argo CD。若只有 1–3 个应用，直接用 GitLab CI `helm upgrade` 更省事（见 [README.md](README.md) 的组合工作流示例）。
 
-**部署形态**：Helm（官方 chart `argo/argo-cd`），命名空间 `argocd`，release 名 `argocd`；暴露方式 **NodePort**（集群当前无 ingress-nginx，与 Harbor/GitLab 的"节点 IP + 端口"形态一致）；**server 以 HTTP 明文提供服务**（`configs.params.server.insecure=true`，lab 环境；上生产前应换 Ingress + cert-manager + HTTPS）；Dex/Notifications 默认关闭以减少组件与镜像依赖；Redis 用 chart 内置单节点（`redis-ha` 子 chart 关闭）。
+**部署形态**：Helm（官方 chart `argo/argo-cd`），命名空间 `argocd`，release 名 `argocd`；暴露方式 **NodePort + HTTPS**（集群当前无 ingress-nginx，与 Harbor/GitLab 的"节点 IP + 端口"形态一致）；**TLS 由自建 CA 签发的证书提供**（写入 `argocd-secret` 的 `tls.crt`/`tls.key`，SAN 含 `argocd.lan` 与节点 IP；`server.insecure` 已关闭）；Dex/Notifications 默认关闭以减少组件与镜像依赖；Redis 用 chart 内置单节点（`redis-ha` 子 chart 关闭）。
 
 **实测基线（2026-11-15，于 `192.168.40.189`）**：
 
@@ -15,7 +15,8 @@
 | chart | `argo-cd-10.18.0`（GitHub Releases tgz） |
 | app | **v3.6.1**（BuildDate 2026-11-04） |
 | 集群 | v1.37.2，控制面 `ubuntu` 192.168.40.189 + 工作节点 `ubunt-dev` 192.168.40.183 |
-| 访问 | `http://192.168.40.189:30700`（NodePort 30700 / HTTPS 30701） |
+| 访问 | `https://192.168.40.189:30701`（NodePort 30700/30701 均已启用 TLS，推荐 30701） |
+| TLS | 自建 CA（`/root/argocd-deploy/tls/ca.crt`）签发，CN=`argocd.lan`，SAN 含 IP `192.168.40.189`；已装入节点系统信任库 |
 | 组件 | 5 个 Pod 全 Running（server / repo-server / application-controller / applicationset-controller / redis） |
 | 仓库接入 | GitLab `ops/k8s-apps`（bot `argocd-bot` + PAT，`configs.repositories` 声明式登记） |
 | GitOps 闭环 | ApplicationSet 生成子应用 → 自动 sync（实测 ≤120s）→ 漂移自愈（ replicas 3→1、被删 ConfigMap 重建） |
@@ -79,6 +80,12 @@ KUBECONFIG="${KUBECONFIG:-/root/.kube/config}"
 VALUES_FILE="${VALUES_FILE:-/tmp/argocd-values.yaml}"
 REDIS_IMAGE_REPO="${REDIS_IMAGE_REPO:-docker.m.daocloud.io/library/redis}"
 REDIS_IMAGE_TAG="${REDIS_IMAGE_TAG:-8.6.4-alpine}"
+# TLS: ca（自建 CA 签名，推荐）| selfsigned（Argo CD 自签）| insecure（明文 HTTP，仅临时）
+TLS_MODE="${TLS_MODE:-ca}"
+TLS_DIR="${TLS_DIR:-/root/argocd-deploy/tls}"
+TLS_CN="${TLS_CN:-argocd.lan}"
+TLS_SAN="${TLS_SAN:-DNS:argocd.lan,DNS:localhost,IP:${NODE_IP}}"
+INSTALL_CA="${INSTALL_CA:-0}"          # 1 = 把自建 CA 装入本机系统信任库（update-ca-certificates）
 # 可选：声明式登记 Git 仓库凭据（推荐，见手册 6.3；留空则不写）
 GITLAB_REPO_URL="${GITLAB_REPO_URL:-}"
 GITLAB_REPO_USER="${GITLAB_REPO_USER:-}"
@@ -244,9 +251,17 @@ redis-ha:
   enabled: false                 # chart 默认即 false；显式声明，避免误开 HA 子 chart
 
 configs:
-  params:
-    server.insecure: true        # 注意：v10 chart 用 configs.params，不是 server.insecure
+  params: {}
 EOF
+if [ "$TLS_MODE" = "insecure" ]; then
+  # 仅临时使用：明文 HTTP（注意 v10 chart 的键路径是 configs.params）
+  python3 - "$VALUES_FILE" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("configs:\n  params: {}\n", "configs:\n  params:\n    server.insecure: true\n")
+open(p, "w").write(s)
+PY
+fi
 if [ -n "$GITLAB_REPO_URL" ]; then
 cat <<EOF
   repositories:
@@ -268,8 +283,10 @@ grep -q "image: quay.io/argoproj/argocd:${ARGOCD_VERSION}" /tmp/argocd-rendered.
   || die "渲染出的 argocd 镜像 tag 不是 ${ARGOCD_VERSION}（chart 与 app 版本不匹配，见第 3.2 节）"
 grep -q 'kind: StatefulSet' /tmp/argocd-rendered.yaml \
   || die "渲染结果缺少 StatefulSet（application-controller）"
-grep -q 'server.insecure: "true"' /tmp/argocd-rendered.yaml \
-  || die "渲染结果未启用 server.insecure（检查 configs.params 写法）"
+if [ "$TLS_MODE" != "insecure" ]; then
+  grep -q 'server.insecure: "true"' /tmp/argocd-rendered.yaml \
+    && die "TLS 模式下不应启用 server.insecure（检查 configs.params）"
+fi
 # ⚠️ 重复 YAML 键会被 helm 静默取最后一个（曾导致 server.service 丢失、NodePort 消失）
 grep -q "nodePort: ${NODEPORT_HTTP}" /tmp/argocd-rendered.yaml \
   || die "渲染结果缺少 nodePort ${NODEPORT_HTTP}（检查 values 是否有重复键）"
@@ -297,15 +314,51 @@ kubectl -n "$NAMESPACE" rollout status statefulset/argocd-application-controller
   || log "警告: statefulset/argocd-application-controller 未在超时内就绪"
 kubectl -n "$NAMESPACE" get pods -o wide
 
-# ---------------- 8. 验证 ----------------
+# ---------------- 8. TLS（可选）----------------
+SCHEME=https; BASE_URL="${TLS_CN}:${NODEPORT_HTTPS}"
+if [ "$TLS_MODE" != "insecure" ]; then
+  log "配置 TLS（模式: ${TLS_MODE}）"
+  mkdir -p "$TLS_DIR"; cd "$TLS_DIR"
+  if [ "$TLS_MODE" = "ca" ] && [ ! -s tls.crt ]; then
+    log "生成自建 CA 与服务器证书（SAN: ${TLS_SAN}）"
+    openssl genrsa -out ca.key 2048 2>/dev/null
+    openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -subj "/O=Lab/CN=Lab Argo CD CA" -out ca.crt 2>/dev/null
+    openssl genrsa -out tls.key 2048 2>/dev/null
+    openssl req -new -key tls.key -subj "/O=Lab/CN=${TLS_CN}" -out tls.csr 2>/dev/null
+    printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth\n' "$TLS_SAN" > san.cnf
+    openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out tls.crt -days 825 -sha256 -extfile san.cnf 2>/dev/null
+  fi
+  if [ -s tls.crt ] && [ -s tls.key ]; then
+    python3 - "$TLS_DIR" <<'PY'
+import base64, json, subprocess, sys
+d = sys.argv[1]
+crt = base64.b64encode(open(f"{d}/tls.crt", "rb").read()).decode()
+key = base64.b64encode(open(f"{d}/tls.key", "rb").read()).decode()
+subprocess.run(["kubectl", "-n", "argocd", "patch", "secret", "argocd-secret", "--type", "merge",
+                "-p", json.dumps({"data": {"tls.crt": crt, "tls.key": key}})], check=True)
+PY
+    kubectl -n "$NAMESPACE" rollout restart deploy/argocd-server >/dev/null
+    kubectl -n "$NAMESPACE" rollout status deploy/argocd-server --timeout=300s >/dev/null 2>&1 || log "警告: server 重启超时"
+    if [ "$INSTALL_CA" = "1" ] && [ -s ca.crt ]; then
+      cp ca.crt /usr/local/share/ca-certificates/lab-argocd-ca.crt
+      update-ca-certificates >/dev/null 2>&1 && log "已将 CA 装入系统信任库"
+    fi
+  else
+    log "未提供 tls.crt/tls.key → 使用 Argo CD 自签证书（客户端需跳过校验）"
+  fi
+else
+  SCHEME=http; BASE_URL="${NODE_IP}:${NODEPORT_HTTP}"
+fi
+
+# ---------------- 9. 验证 ----------------
 log "验证服务"
 sleep 5
-# 注意：Argo CD 3.x 的健康检查端点是 /healthz（/api/health 已 404）
-CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://${NODE_IP}:${NODEPORT_HTTP}/healthz" || echo 000)
+# 注意：Argo CD 3.x 的健康检查端点是 /healthz（/api/health 已 404）；TLS 模式下正文 ok
+CODE=$(curl -sk -o /dev/null -w '%{http_code}' "${SCHEME}://${NODE_IP}:${NODEPORT_HTTPS}/healthz" || echo 000)
+[ "$CODE" = "200" ] || CODE=$(curl -sk -o /dev/null -w '%{http_code}' "${SCHEME}://${NODE_IP}:${NODEPORT_HTTP}/healthz" || echo 000)
 [ "$CODE" = "200" ] || log "警告: /healthz 返回 ${CODE}（可能仍在启动）"
-BODY=$(curl -s "http://${NODE_IP}:${NODEPORT_HTTP}/healthz" || true)
+BODY=$(curl -sk "${SCHEME}://${NODE_IP}:${NODEPORT_HTTPS}/healthz" || true)
 echo "healthz: ${BODY}"
-# 实测 3.x 的 /healthz 返回 200 + 正文 ok（不是 {"status":"healthy"}）
 echo "$BODY" | grep -q '^ok$' || log "警告: healthz 未返回 ok"
 
 # ---------------- 9. 结果 ----------------
@@ -314,12 +367,13 @@ ADMIN_PASS=$(kubectl -n "$NAMESPACE" get secret argocd-initial-admin-secret \
 cat <<EOF
 
 ================ Argo CD 安装完成 ================
-地址:   http://${NODE_IP}:${NODEPORT_HTTP}        # 注意用 http（server.insecure=true）
+地址:   ${SCHEME}://${NODE_IP}:${NODEPORT_HTTPS}        # TLS 模式: https（自建 CA 签名）
 账号:   admin
 密码:   ${ADMIN_PASS}
 版本:   ${ARGOCD_VERSION}（chart ${CHART_VERSION}，来源 ${CHART_SOURCE}）
 values: ${VALUES_FILE}
-CLI:    argocd login ${NODE_IP}:${NODEPORT_HTTP} --plaintext --username admin --password '${ADMIN_PASS}'
+CA 证书: ${TLS_DIR}/ca.crt    # 客户端导入后不再告警（未导入则用 --insecure）
+CLI:    argocd login ${NODE_IP}:${NODEPORT_HTTPS} --username admin --password '${ADMIN_PASS}'   # 已导入 CA 时无需 --insecure
 CLI 二进制（GitHub Releases，建议走国内代理）:
   curl -sL -o argocd https://ghfast.top/https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64
   chmod +x argocd && ./argocd version --client   # 必须能打印版本，否则是截断文件
@@ -337,12 +391,13 @@ EOF
 | 1. 前置检查 | 第 2 章 | 工具/可达性/NodePort 占用（排除自身命名空间） |
 | 2. 镜像源 | 第 4 章 | 检测并（经确认后）配置 `certs.d/quay.io` → `quay.m.daocloud.io` |
 | 3. 获取 chart | 第 3.2 章 | `repo`（自动解析版本）或 `release`（GitHub tgz + `helm dependency update`），失败自动降级 |
-| 4. 生成 values | 第 5.2 章 | NodePort + `configs.params.server.insecure` + redis 镜像改国内源 + 可选 `configs.repositories` |
-| 5. 渲染校验 | 第 5.3 章 | 核对镜像 tag / StatefulSet / insecure / dex 禁用，**先校验再安装** |
+| 4. 生成 values | 第 5.2 章 | NodePort + `configs.params: {}`（TLS 开启）+ redis 镜像改国内源 + 可选 `configs.repositories` |
+| 5. 渲染校验 | 第 5.3 章 | 核对镜像 tag / StatefulSet / nodePort / dex 禁用，**先校验再安装** |
 | 6. 安装/升级 | 第 5.3 章 | 幂等：已装走 `upgrade`，否则 `install` |
 | 7. 等待就绪 | 第 5.4 章 | 4 个 Deployment + 1 个 StatefulSet 逐个 rollout |
-| 8. 验证 | 第 6.6 节 | `/healthz` = healthy（**不是** `/api/health`） |
-| 9. 结果 | 第 6.1 节 | 打印地址/账号/初始密码/CLI 登录与下载命令 |
+| 8. TLS | 第 3.3 节 | 自建 CA 签发证书 → patch `argocd-secret` → 重启 server（`TLS_MODE=ca`，默认） |
+| 9. 验证 | 第 6.6 节 | `/healthz` = `ok`（**不是** `/api/health`） |
+| 10. 结果 | 第 6.1 节 | 打印地址/账号/初始密码/CLI 登录与下载命令 |
 
 ### 0.4 实测安装记录（2026-11-15）
 
@@ -352,7 +407,7 @@ chart:  argo-cd-10.18.0（GitHub Releases tgz，helm dependency update 拉取 re
 app:    v3.6.1
 镜像:   quay.io/argoproj/argocd:v3.6.1（quay.m.daocloud.io 映射，首拉约 89s/201MB）
         docker.m.daocloud.io/library/redis:8.6.4-alpine（覆盖 chart 默认 ecr-public）
-结果:   5/5 Pod Running；http://192.168.40.189:30700/healthz → 200 ok
+结果:   5/5 Pod Running；https://192.168.40.189:30701/healthz → 200 ok（CA 签名证书，无告警）
 ```
 
 > **注意**：Pod 被调度到哪个节点，该节点就要能拉到镜像。实测 repo-server 重启后落到控制面 `ubuntu`，首次拉 `argocd` 镜像耗时 **3m56s**（init container）——国内镜像源可用但大镜像首拉慢，`--timeout` 要给足（脚本用 300s rollout，必要时调大）。
@@ -370,8 +425,12 @@ app:    v3.6.1
 | `ARGOCD_VERSION` | 自动（chart 的 appVersion） | Argo CD 应用版本，实测 `v3.6.1`；**必须为稳定版**（非 rc/beta） |
 | `CHART_DIR` | `/root/argocd-deploy` | release 模式的下载/解压目录 |
 | `NODE_IP` | 必填 | 集群节点 IP（NodePort 对外地址） |
-| `NODEPORT_HTTP` | `30700` | server HTTP NodePort（`server.insecure=true` 时用这个访问 UI） |
-| `NODEPORT_HTTPS` | `30701` | server HTTPS NodePort（当前留作后续上 TLS） |
+| `NODEPORT_HTTP` | `30700` | server 端口 NodePort（TLS 开启后同样提供 HTTPS） |
+| `NODEPORT_HTTPS` | `30701` | server HTTPS NodePort（**TLS 模式下用这个访问 UI**） |
+| `TLS_MODE` | `ca` | `ca`=自建 CA 签名（推荐）；`selfsigned`=Argo CD 自签；`insecure`=明文 HTTP（仅临时） |
+| `TLS_DIR` | `/root/argocd-deploy/tls` | CA/证书目录（含 `ca.crt`，供客户端导入） |
+| `TLS_CN` / `TLS_SAN` | `argocd.lan` / `DNS:argocd.lan,DNS:localhost,IP:<NODE_IP>` | 证书 CN 与 SAN（SAN 必须含实际访问用的主机名/IP） |
+| `INSTALL_CA` | `0` | `1`=把自建 CA 装入执行机系统信任库（`update-ca-certificates`） |
 | `KUBECONFIG` | `/root/.kube/config` | kubeconfig 路径 |
 | `VALUES_FILE` | `/tmp/argocd-values.yaml` | 生成的 values 文件路径（**勿提交仓库**，含仓库凭据） |
 | `REDIS_IMAGE_REPO` | `docker.m.daocloud.io/library/redis` | redis 镜像仓库（chart 默认 `ecr-public.aws.com/docker/library/redis`） |
@@ -465,7 +524,32 @@ Helm 仓库 `https://argoproj.github.io/argo-helm` 的 chart 与 Argo CD app 版
 
 ### 3.3 为什么用 NodePort + HTTP（而不是 Ingress）
 
-集群当前无 ingress-nginx、无 cert-manager，80/8080 已被占用（见 [kubernetes-gitlab.md](kubernetes-gitlab.md) 1.2）。Argo CD 的 UI/API 需要被人和 CLI 访问，**NodePort 是零新增依赖的暴露方式**，与 Harbor/GitLab 一致。安全边界：`server.insecure=true` 只应在内网 lab 使用；上生产前按第 7 章第 6 条接入 Ingress + TLS。
+集群当前无 ingress-nginx、无 cert-manager，80/8080 已被占用（见 [kubernetes-gitlab.md](kubernetes-gitlab.md) 1.2）。Argo CD 的 UI/API 需要被人和 CLI 访问，**NodePort 是零新增依赖的暴露方式**，与 Harbor/GitLab 一致。
+
+**TLS 方案（实测）**：Argo CD server 的证书来自 `argocd-secret` 的 `tls.crt`/`tls.key`（没有 `--tls-certificate` 启动参数，chart 的 `server.certificateSecret` 也只负责创建 Secret、不会自动挂载）。因此做法是：自建 CA 签发一张 SAN 含 `argocd.lan` 与节点 IP 的证书 → patch 进 `argocd-secret` → 重启 `argocd-server`。客户端导入 `ca.crt` 后**无浏览器告警**；`helm upgrade` 不会覆盖 `argocd-secret`（该 Secret 由 Argo CD 运行时自管）。
+
+```bash
+# 一键（脚本 TLS_MODE=ca 已含）：或手动执行
+mkdir -p /root/argocd-deploy/tls && cd /root/argocd-deploy/tls
+openssl genrsa -out ca.key 2048
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -subj "/O=Lab/CN=Lab Argo CD CA" -out ca.crt
+openssl genrsa -out tls.key 2048
+openssl req -new -key tls.key -subj "/O=Lab/CN=argocd.lan" -out tls.csr
+printf 'subjectAltName=DNS:argocd.lan,DNS:localhost,IP:192.168.40.189\nextendedKeyUsage=serverAuth\n' > san.cnf
+openssl x509 -req -in tls.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out tls.crt -days 825 -sha256 -extfile san.cnf
+python3 - <<'PY'
+import base64, json, subprocess
+crt = base64.b64encode(open("tls.crt","rb").read()).decode()
+key = base64.b64encode(open("tls.key","rb").read()).decode()
+subprocess.run(["kubectl","-n","argocd","patch","secret","argocd-secret","--type","merge","-p",
+                json.dumps({"data":{"tls.crt":crt,"tls.key":key}})], check=True)
+PY
+kubectl -n argocd rollout restart deploy/argocd-server
+```
+
+> **客户端信任**：把 `ca.crt` 导入操作系统/浏览器信任库（或 `cp ca.crt /usr/local/share/ca-certificates/lab-argocd-ca.crt && update-ca-certificates`）；未导入时浏览器会告警，CLI 可用 `--insecure` 跳过校验。
+> **回退明文**：`configs.params.server.insecure: true`（键名注意是 `configs.params`）后 `helm upgrade`；此时 30700/30701 都会变成明文 HTTP。
+> 上生产：建议改为 Ingress + cert-manager（chart 的 `server.certificate` 已内置 Certificate 资源）或接入真实 CA。
 
 ## 4. 镜像源最佳实践（containerd `certs.d`）
 
@@ -580,8 +664,7 @@ redis-ha:
   enabled: false                    # chart 默认即 false，显式声明
 
 configs:
-  params:
-    server.insecure: true           # ⚠️ v10 chart：不是 server.insecure
+  params: {}                          # TLS 已启用（默认）；回退明文需改为 server.insecure: true（见 3.3）
   repositories:                     # 可选：声明式登记 Git 仓库凭据（见 6.3）
     lan-gitlab-k8s-apps:
       url: http://192.168.40.189:30080/ops/k8s-apps.git
@@ -612,7 +695,7 @@ printf 'StatefulSet=%s Deployment=%s PVC=%s\n' \
   "$(grep -c 'kind: Deployment' /tmp/argocd-rendered.yaml)" \
   "$(grep -c 'kind: PersistentVolumeClaim' /tmp/argocd-rendered.yaml)"   # 期望 1 / 4 / 0
 grep -n 'dexidp/dex' /tmp/argocd-rendered.yaml                    # 应无输出
-grep -n 'server.insecure: "true"' /tmp/argocd-rendered.yaml       # 应有输出
+grep -n 'nodePort: 30700' /tmp/argocd-rendered.yaml               # 应有输出（防重复键丢 service）
 
 # 安装（或升级）
 if helm -n argocd list | grep -q '^argocd'; then
@@ -639,13 +722,13 @@ kubectl -n argocd get pods -o wide
 ### 6.1 访问 UI 与初始密码
 
 ```bash
-NODE_IP=192.168.40.189; PORT=30700
+NODE_IP=192.168.40.189; PORT=30701
 # 初始管理员密码（仅首次安装后存在；轮换后该 Secret 会被删除，见下方「密码轮换与找回」）
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d 2>/dev/null || echo "（已删除，密码已轮换）"
-# 浏览器打开（注意是 http，不是 https）
-echo "http://${NODE_IP}:${PORT}"
+# 浏览器打开（HTTPS；已导入 CA 时无告警，未导入则接受告警即可）
+echo "https://${NODE_IP}:${PORT}"
 # 健康检查（Argo CD 3.x 的端点是 /healthz，返回 200 + 正文 ok；/api/health 返回 404）
-curl -s "http://${NODE_IP}:${PORT}/healthz"; echo
+curl -s "https://${NODE_IP}:${PORT}/healthz"; echo      # 已导入 CA；否则用 curl -k
 ```
 
 **密码轮换与找回（实测）**：
@@ -656,7 +739,7 @@ OLD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.da
 NEW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)
 echo "NEWPASS=$NEW" > /root/argocd-deploy/.adminpass      # 本地留存，勿提交仓库
 argocd account update-password --current-password "$OLD" --new-password "$NEW"
-argocd login 192.168.40.189:30700 --plaintext --username admin --password "$NEW"   # 验证
+argocd login 192.168.40.189:30701 --username admin --password "$NEW"   # 验证（已导入 CA；否则加 --insecure）
 kubectl -n argocd delete secret argocd-initial-admin-secret    # 官方建议：轮换后删除初始 Secret
 
 # —— 找回（实测：删了 initial secret 后重启 server 不会重建）——
@@ -685,13 +768,13 @@ chmod +x argocd
 ./argocd version --client        # ⚠️ 必须能打印版本；segfault/无输出 = 文件被截断，需重下
 
 PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)
-./argocd login 192.168.40.189:30700 --plaintext --username admin --password "$PASS"
+./argocd login 192.168.40.189:30701 --username admin --password "$PASS"   # 已导入 CA；否则加 --insecure
 ./argocd cluster list          # 应看到 https://kubernetes.default.svc
 ./argocd app list              # 应为空（尚未创建应用）
 ```
 
 > **坑**：Argo CD 3.x 的 server 不再提供 `/downloads/argocd-linux-amd64`（实测 404），CLI 需自行从 GitHub Releases 获取；`/v1/messages` 等接口不受影响。
-> `--plaintext` 对应 `server.insecure=true`。
+> `--insecure` 用于跳过证书校验（未导入自建 CA 时）；`--plaintext` 仅在 `server.insecure=true` 的明文模式下使用。
 
 ### 6.3 接入 GitLab 仓库（私有库凭据）
 
@@ -891,18 +974,19 @@ deploy:
 ```bash
 #!/bin/bash
 # Argo CD 快速验证：Pod / 健康端点 / 初始密码 / root 应用 / 自愈
-# 用法: NODE_IP=192.168.40.189 PORT=30700 bash argocd_verify.sh
+# 用法: NODE_IP=192.168.40.189 PORT=30701 bash argocd_verify.sh
 set -u
 NODE_IP="${NODE_IP:-192.168.40.189}"
-PORT="${PORT:-30700}"
+PORT="${PORT:-30701}"      # TLS 模式用 30701；明文模式用 30700
 NS="${NS:-argocd}"
 PASS=0; FAIL=0
 chk() { if eval "$2" >/dev/null 2>&1; then echo "PASS: $1"; PASS=$((PASS+1)); else echo "FAIL: $1"; FAIL=$((FAIL+1)); fi; }
 
 chk "全部 Pod Running/Completed" "test \$(kubectl -n $NS get pods --no-headers | grep -cE 'Running|Completed') -eq \$(kubectl -n $NS get pods --no-headers | wc -l)"
-chk "健康端点 /healthz"        "curl -s http://${NODE_IP}:${PORT}/healthz | grep -qx ok"
+chk "健康端点 /healthz"        "curl -sk https://${NODE_IP}:${PORT}/healthz | grep -qx ok"
 chk "admin 密码已配置"          "kubectl -n $NS get secret argocd-secret -o json | grep -q admin.password"
 chk "server 为 NodePort"       "kubectl -n $NS get svc argocd-server -o jsonpath='{.spec.type}' | grep -q NodePort"
+chk "TLS 证书为自建 CA"        "echo | openssl s_client -connect ${NODE_IP}:${PORT} -servername argocd.lan 2>/dev/null | openssl x509 -noout -issuer | grep -q 'Lab Argo CD CA'"
 chk "root Application 存在"    "kubectl -n $NS get application root --no-headers | grep -q ."
 chk "ApplicationSet 就绪"      "kubectl -n $NS get applicationset root -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}' | grep -q 'ResourcesUpToDate=True'"
 
@@ -910,7 +994,7 @@ echo "=== 结果: $PASS 通过, $FAIL 失败 ==="
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
 ```
 
-> 首次安装后预期 **4/6 PASS**（root 与 ApplicationSet 尚未创建）；完成 6.3/6.4 后应为 **6/6 PASS**。
+> 首次安装后预期 **5/7 PASS**（root 与 ApplicationSet 尚未创建）；完成 6.3/6.4 后应为 **7/7 PASS**（实测 2026-11-15：6 项 + TLS 证书校验）。
 
 **漂移自愈验证**（可选，实测通过）：
 
@@ -939,7 +1023,7 @@ sleep 40; kubectl -n 99-smoke get configmap smoke-config -o jsonpath='{.data.ori
 | 10 | **幂等安装** | `helm -n argocd list` 判断 install / upgrade |
 | 11 | **镜像源用 containerd `certs.d` 透明映射** | 不改 chart 仓库地址，保留主/备回退；`quay.io` → `quay.m.daocloud.io` 为主、`quay.nju.edu.cn` 为备 |
 | 12 | **`ctr` 验证镜像源要加 `--hosts-dir`** | 不加会直连上游误判 |
-| 13 | **上生产前换 HTTPS** | `server.insecure=true` 仅 lab；生产用 Ingress + cert-manager（见 8.2） |
+| 13 | **TLS 用自建 CA 证书写入 `argocd-secret`** | 默认已启用（`TLS_MODE=ca`）；客户端导入 `ca.crt` 后无告警；生产可改 Ingress + cert-manager（见 3.3） |
 | 14 | **职责单一** | 同一批资源只由 Argo CD 或 `helm upgrade` 之一管理，不要并用 |
 | 15 | **CI 改 manifest、Argo CD 做 sync** | 避免循环；CI 不直接 `kubectl`/`helm` 操作集群 |
 | 16 | **root Application 加 finalizer** | `resources-finalizer.argcd.argoproj.io` 保证删除级联正确（建议用带 `/` 的域名限定写法） |
@@ -967,12 +1051,13 @@ kubectl -n argocd describe pod <pod>        # 看 Events 真实拉取地址与�
 - 新节点首次拉镜像慢（实测 ~4 分钟）→ 调大 rollout `--timeout`，或提前用 `ctr images pull` 预热。
 - `manifest unknown / not found` → 确认 `${ARGOCD_VERSION}` 镜像真实存在（第 2 章第 6 步）。
 
-### 8.2 UI 打不开 / 登录页异常
+### 8.2 UI 打不开 / 证书告警
 
-- `server.insecure=true` 时**必须用 `http://` 访问**（用 https 会握手失败）；访问地址为 `http://<NODE_IP>:30700`。
-- 若 values 里写成了 `server.insecure`（错误键），渲染不会报错但服务端仍是 HTTPS → 用 `grep 'server.insecure: "true"' /tmp/argocd-rendered.yaml` 校验。
-- CLI 报 TLS 错误 → 加 `--plaintext`。
-- 端口不通 → 确认 NodePort 未被占用、防火墙放行（`ss -ltnp | grep 30700`）。
+- 默认 TLS 模式：访问 `https://<NODE_IP>:30701`；浏览器告警 = 未导入自建 CA（导入 `ca.crt` 即可，见 3.3）。
+- `curl: (60) SSL certificate problem` → 未导入 CA；用 `curl -k` 临时绕过或导入 CA。
+- CLI 报证书错误 → 加 `--insecure`；若回退明文（`server.insecure=true`）则改用 `--plaintext` + `http://`。
+- 若 values 里写成了 `server.insecure`（错误键），渲染不会报错但行为不符 → 用 `grep 'server.insecure: "true"' /tmp/argocd-rendered.yaml` 校验。
+- 端口不通 → 确认 NodePort 未被占用、防火墙放行（`ss -ltnp | grep 30701`）。
 
 ### 8.3 应用一直 OutOfSync / SyncFailed / ComparisonError
 
@@ -1060,7 +1145,7 @@ kubectl delete ns argocd
 
 **已知遗留**
 
-- 本部署为 **HTTP 明文**（`server.insecure=true`），仅适用内网 lab；上生产前必须换 Ingress + TLS（第 7 章第 13 条）。
+- TLS 已启用（自建 CA，`https://192.168.40.189:30701`）；**其他客户端需导入 `ca.crt`**，否则会有证书告警。上生产建议改 Ingress + cert-manager 或接入真实 CA（第 7 章第 13 条）。
 - **未接 SSO**：仅 admin 本地账号；多人使用需开 dex + GitLab OAuth（第 7 章第 20 条）。admin 密码已轮换，新密码在节点 `/root/argocd-deploy/.adminpass`（`argocd-initial-admin-secret` 已删除；找回方法见 6.1）。
 - **未配监控/告警**：Argo CD 暴露 `:8082`/`:8083` 指标，需要时接 Prometheus。
 - **Redis 无持久化**：重启后缓存重建，属预期。
@@ -1078,8 +1163,12 @@ kubectl delete ns argocd
 ├── argo-cd/                     # 解压后的 chart（含 charts/redis-ha）
 ├── argocd-values.yaml           # Helm values（含仓库凭据，勿提交）
 ├── argocd-cli                   # argocd CLI（v3.6.1）
+├── tls/                         # 自建 CA 与服务器证书（ca.crt 供客户端导入）
+│   ├── ca.crt / ca.key          # Lab Argo CD CA
+│   ├── tls.crt / tls.key        # 服务器证书（CN=argocd.lan，SAN 含节点 IP）
+│   └── san.cnf
 ├── k8s-apps/                    # GitOps 配置仓库本地克隆（推回 GitLab ops/k8s-apps）
-├── .botpat / .botpass           # 机器人凭据（勿提交）
+├── .botpat / .botpass / .adminpass   # 凭据（勿提交）
 └── applications-backup.yaml     # 升级前备份（按需生成）
 ```
 
@@ -1102,6 +1191,7 @@ kubectl delete ns argocd
 | 资源基线 | 5 个组件均已设 requests/limits（见 5.2）；`repoServer` 键名修正后生效 |
 | admin | 密码已轮换（bcrypt 写入 `argocd-secret`，新密码存 `/root/argocd-deploy/.adminpass`）；`argocd-initial-admin-secret` 已删除 |
 | 备份 | `/root/argocd-deploy/applications-backup.yaml`（Applications + ApplicationSets） |
+| TLS | 自建 CA（`/root/argocd-deploy/tls/`）签发，CN=`argocd.lan`、SAN 含 IP；写入 `argocd-secret` 的 `tls.crt`/`tls.key`；CA 已装入节点信任库，`curl`/`argocd login` 无需 `-k`/`--insecure` |
 
 ## 附录 C：`ops/k8s-apps` 仓库模板
 
