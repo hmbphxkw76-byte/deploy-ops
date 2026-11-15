@@ -5,12 +5,17 @@
 本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 Ubuntu 上自动安装配置 Docker、配置 Windows Docker Desktop 镜像加速，以及执行日常空间清理。
 Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装部分幂等，已完成的步骤会自动跳过。清理属于破坏性维护操作，必须先经用户确认。
 
+> **实测基线（2026-11-15）**：Ubuntu 24.04.2 LTS / x86_64 / kernel 6.8.0-149 / root。按本手册装得 Docker 29.9.3 + Compose v5.7.1，镜像加速生效，`hello-world` 端到端通过。本环境 `download.docker.com` 与 `mirrors.aliyun.com` 均可达，按"国内源优先"采用了后者。
+>
+> 跨组件的实操要点与镜像源实测数据见 [linux-provisioning-playbook.md](linux-provisioning-playbook.md)。
+
 ## 0. 参数区（执行前由用户确认或使用默认值）
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `TARGET_OS` | `ubuntu` | 目标环境：`ubuntu`（走第 1~2 章）或 `windows`（走第 3 章）；仅用于选择章节，不参与命令替换 |
-| `DOCKER_APT_MIRROR` | `https://download.docker.com/linux/ubuntu` | Docker apt 仓库地址；国内网络对官方源报 `Could not handshake` 时改用 `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`（GPG key 仍可用官方地址下载） |
+| `DOCKER_APT_MIRROR` | `https://mirrors.aliyun.com/docker-ce/linux/ubuntu` | Docker apt 仓库地址。**国内源优先**，默认阿里云（GPG key 同域：`https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg`）；海外环境改回 `https://download.docker.com/linux/ubuntu` |
+| `UBUNTU_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu` | Ubuntu 基础 apt 源（可选，仅国内加速用）；默认沿用系统自带 `archive.ubuntu.com` |
 | `REGISTRY_MIRRORS` | `https://docker.xuanyuan.me`、`https://docker.m.daocloud.io`、`https://docker.imgdb.de` | Ubuntu 侧镜像加速地址列表 |
 | `DOCKER_MIRRORS_WIN` | `https://docker.xuanyuan.me`、`https://docker.1ms.run`、`https://docker.m.daocloud.io` | Windows Docker Desktop 镜像加速地址列表 |
 | `RUN_CLEANUP` | `false` | 是否执行第 5 章清理；默认不执行，需用户显式确认 |
@@ -54,6 +59,13 @@ docker version
 逐步执行，每步失败即停止并报告：
 
 ```bash
+# 0) （国内源优先，可选）把 Ubuntu 基础源切到国内镜像，避免 archive.ubuntu.com 抖动
+#     注意：备份文件不要留在 /etc/apt/sources.list.d/ —— apt 会因扩展名不合法而忽略它并打印
+#     "N: Ignoring file '...bak.20261115' ... invalid filename extension" 告警
+sudo mkdir -p /root/apt-backups
+sudo cp -a /etc/apt/sources.list.d/ubuntu.sources /root/apt-backups/ubuntu.sources.bak.$(date +%Y%m%d)
+sudo sed -i 's|http://archive.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu}|g; s|http://security.ubuntu.com/ubuntu/|${UBUNTU_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu}|g' /etc/apt/sources.list.d/ubuntu.sources
+
 sudo apt-get update
 
 # 可选：整体升级（可能升级内核并要求重启）。用户不希望动系统时可跳过此行
@@ -61,9 +73,9 @@ sudo apt-get upgrade -y
 
 sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
 
-# 添加 Docker 官方 GPG key
+# 添加 Docker GPG key（与 apt 仓库同域，国内网络更稳）
 sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo curl -fsSL "${DOCKER_APT_MIRROR:-https://mirrors.aliyun.com/docker-ce/linux/ubuntu}/gpg" -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 
 # 添加 apt 仓库（自动适配当前发行版代号与架构）
@@ -94,7 +106,12 @@ sudo tee /etc/docker/daemon.json <<-'EOF'
     "https://docker.xuanyuan.me",
     "https://docker.m.daocloud.io",
     "https://docker.imgdb.de"
-  ]
+  ],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "50m",
+    "max-file": "3"
+  }
 }
 EOF
 
@@ -102,7 +119,9 @@ sudo systemctl daemon-reload
 sudo systemctl restart docker
 ```
 
-> 上面的 `registry-mirrors` 数组应与参数区 `REGISTRY_MIRRORS` 一致（示例值即默认值），参数被覆盖时同步替换。若用户已有自定义 daemon.json（如配置了 data-root 等），Agent 应先读取现有内容并合并 registry-mirrors，禁止直接覆盖。
+> **日志轮转是必需项而非可选**：Docker 默认 `json-file` 无大小上限，容器长期运行会把 `/var/lib/docker/containers/*/*-json.log` 撑到几十 GB 直至磁盘写满。上面两项给单个容器日志限定了 50MB × 3 份。已有自定义 `log-driver`（如 `local`、`journald`）时不要覆盖，只合并 `log-opts` 或改用对应驱动的轮转参数。
+
+> 上面的 `registry-mirrors` 数组应与参数区 `REGISTRY_MIRRORS` 一致（示例值即默认值），参数被覆盖时同步替换。若用户已有自定义 daemon.json（如配置了 data-root 等），Agent 应先读取现有内容并合并 registry-mirrors，禁止直接覆盖；修改前先备份到 `/etc/docker/daemon.json.bak.$(date +%Y%m%d)`（该目录 apt 不会扫描，无告警问题）。
 
 ### 2.3 服务自启与用户组
 
@@ -115,6 +134,7 @@ sudo usermod -aG docker $(whoami)
 ```
 
 > usermod 幂等，重复执行安全。执行后需提醒用户重新登录（或 `newgrp docker`）才能免 sudo 使用 docker。
+> 若当前用户已是 `root`，则无需加入 docker 组（root 本就可用），此步可跳过。
 
 ## 3. Windows Docker Desktop 镜像加速
 
@@ -420,9 +440,19 @@ docker system prune -a
 ## 6. Agent 执行注意事项
 
 - Ubuntu 侧命令需要 sudo；Agent 应使用非交互方式执行 sudo 命令（如终端已授权），避免卡在密码输入。
+- **Agent 远程执行前先配 SSH 密钥免密**，避免每条命令都走密码交互。Windows 本机通常没有 `ssh-copy-id`，用管道写入即可（幂等，重复执行安全）：
+  ```bash
+  # 本机已有密钥则跳过第一步
+  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+  cat ~/.ssh/id_ed25519.pub | ssh root@<host> "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && grep -qF '$(cat ~/.ssh/id_ed25519.pub)' ~/.ssh/authorized_keys || cat >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys"
+  ```
+- **Windows 本机 OpenSSH 临时用密码登录时**：`SSH_ASKPASS` 指向的程序必须是 Windows 可执行文件（`.bat` / `.cmd` / `.exe`），指向 `.sh` 会报 `ssh_askpass: exec(...): No such file or directory`；需同时设置 `SSH_ASKPASS_REQUIRE=force` 与 `DISPLAY=:0`。该手段仅用于首次装公钥，之后一律改用密钥。
 - **`download.docker.com` TLS 握手失败**（国内网络常见，apt update 报 `Could not handshake`）：将 `/etc/apt/sources.list.d/docker.sources` 中的 `https://download.docker.com/linux/ubuntu` 替换为阿里云镜像 `https://mirrors.aliyun.com/docker-ce/linux/ubuntu`，GPG key 可继续沿用官方地址（curl 下载通常可用）。
 - **dpkg 锁被 `unattended-upgr` 占用**（`E: Could not get lock /var/lib/dpkg/lock-frontend`）：新装 Ubuntu 22.04 首次启动会自动跑安全更新。等待其自然结束；若长时间无进展（进程 CPU 时间持续增长、网络不佳）可 `systemctl stop unattended-upgrades`，必要时 kill 进程；该服务被 apt-daily 触发会自动重启抢锁，需一并 `systemctl disable unattended-upgrades apt-daily.timer apt-daily-upgrade.timer` 后再继续安装。
 - **安装即自启**：`apt install docker-ce` 会自动启动 docker 服务，若 daemon.json 在安装之后才写入，必须 `systemctl restart docker` 镜像加速才生效（`docker info | grep -A 4 "Registry Mirrors"` 验证）。
+- **apt 备份文件别留在 `/etc/apt/sources.list.d/`**：该目录下扩展名非 `.list` / `.sources` 的文件会被 apt 忽略并打印 `N: Ignoring file '...bak.20261115' ... invalid filename extension`。备份请放到 `/root/apt-backups/` 等目录；已产生的告警把文件移走即可消失，不影响安装结果。
+- **GPG key 与 apt 仓库同域**：国内网络下 `download.docker.com` 的 key 与仓库可能时通时断，用阿里云镜像同时提供 key 与 deb 包（`https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg`）可一次避开两类 TLS 抖动。
+- **确认加速真实生效**：`docker info` 的 `Registry Mirrors` 只反映 daemon.json 声明，不代表地址可用；最终以 `docker run --rm hello-world` 或 `docker pull` 成功为准（见 4.1 验证脚本）。
 - 修改 daemon.json 前必须先读取现有内容，合并配置而不是覆盖。
 - 服务操作（restart/enable）失败时，用 `journalctl -u docker --no-pager -n 50` 查看日志并报告原因，不要盲目重试。
 - 每完成一章，向用户汇报当前状态与下一步计划。

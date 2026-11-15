@@ -5,6 +5,10 @@
 本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 **Linux / Unix（默认 Ubuntu）** 上自动完成 Promptfoo 的全局安装、验证与红队测试基础使用。
 Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装与初始化幂等，已完成的内容会自动跳过。
 
+> **实测基线（2026-11-15）**：Ubuntu 24.04.2 LTS / x86_64 / root，Node v24.22.3 + npm 11.19.1。全局安装耗时约 1 分钟（603 个包），装得 **promptfoo 0.125.1**；`promptfoo init --no-interactive` 实测可在非交互 SSH 会话中完成，生成 `promptfooconfig.yaml` + `README.md`。
+>
+> 跨组件的实操要点与镜像源实测数据见 [linux-provisioning-playbook.md](linux-provisioning-playbook.md)。
+
 ## 0. 参数区（执行前由用户确认或使用默认值）
 
 | 参数 | 默认值 | 说明 |
@@ -18,14 +22,16 @@ Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装�
 node --version 2>/dev/null || echo "NODE_NOT_INSTALLED"
 npm --version 2>/dev/null || echo "NPM_NOT_INSTALLED"
 promptfoo --version 2>/dev/null || echo "PROMPTFOO_NOT_INSTALLED"
-ls "${PROJECT_DIR:-.}/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
+# 配置可能是 promptfooconfig.yaml（新版默认）或 promptfoo.yaml（旧版/兼容名），两者都要看
+ls "${PROJECT_DIR:-.}/promptfooconfig.yaml" "${PROJECT_DIR:-.}/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
 ```
 
 判定逻辑：
 
 - Node/npm 不可用 → 先按 [linux-npm.md](./linux-npm.md) 第 2 章安装 Node.js，再继续。
 - `promptfoo --version` 正常输出 → 跳过第 2 章。
-- 项目下已有 `promptfoo.yaml` → 跳过第 3 章初始化。
+- 项目下已有 `promptfooconfig.yaml` 或 `promptfoo.yaml` → 跳过第 4 章初始化。
+- Node 版本：实测 Node 24 LTS（v24.22.3）可正常安装与运行；建议使用 LTS 主版本而非 `stable`（避免镜像索引解析到预发布版）。
 
 ## 2. 全局安装
 
@@ -34,7 +40,9 @@ ls "${PROJECT_DIR:-.}/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
 npm install -g promptfoo --registry="${NPM_REGISTRY:-https://registry.npmmirror.com}" --allow-scripts
 ```
 
-> `--allow-scripts` 允许执行包的安装脚本（Promptfoo 需要）；仅对可信包使用该参数。若 npm 版本较旧、报 `Unknown cli config`，去掉该参数直接安装即可。
+> `--allow-scripts` 允许执行包的安装脚本（Promptfoo 需要）；仅对可信包使用该参数。实测 npm 11.19.1 下该参数有效且为推荐写法；若 npm 版本较旧、报 `Unknown cli config`，去掉该参数直接安装即可。
+>
+> npm ≥ 11 即使不加该参数也通常能装上（只是打印 `npm warn install-scripts` 警告），但部分包会因安装脚本未执行而行为异常，建议始终显式加上。
 
 ## 3. 验证安装
 
@@ -48,15 +56,19 @@ promptfoo --version
 
 在 `PROJECT_DIR` 下执行，会生成配置示例文件并引导下一步：
 
+**Agent / SSH 非交互会话**：必须加 `--no-interactive`，否则命令会等待键盘输入而挂起：
+
 ```bash
 cd "${PROJECT_DIR:-.}"
-promptfoo init
+promptfoo init --no-interactive
 
 # 或使用 npx 保证初始化脚本为最新版本：
-npx promptfoo@latest init
+npx promptfoo@latest init --no-interactive
 ```
 
-已存在 `promptfoo.yaml` 时跳过，避免覆盖现有配置。
+> 实测（promptfoo 0.125.1）`init` 生成的是 **`promptfooconfig.yaml`**（新版默认名）与 `README.md`，而不是旧文档常写的 `promptfoo.yaml`；promptfoo 两者都识别。写文档或做存在性检查时不要只找 `promptfoo.yaml`。
+
+已存在 `promptfooconfig.yaml` / `promptfoo.yaml` 时跳过，避免覆盖现有配置。
 
 ## 5. 红队测试命令（Agent 按需调用）
 
@@ -113,6 +125,9 @@ nohup socat TCP-LISTEN:15501,fork,reuseaddr TCP:127.0.0.1:15500 >/tmp/socat-pf.l
 ## 7. Agent 执行注意事项
 
 - 全局安装失败时，先检查网络与镜像源（`npm ping`），不要盲目重试。
+- **`init` 在非交互会话必须加 `--no-interactive`**；无该参数时命令卡在交互向导上，Agent 易误判为“安装失败”。
+- `promptfoo init` 结束后可能打印 `telemetry.shutdown() timed out during shutdown`，属正常退出噪声，不影响生成的配置。
+- 全新环境建议先按第 1 章检查 Node 版本，再安装；promptfoo 依赖较新 Node，避免在 Node 16 等旧版本上直接装最新版。
 - `redteam run` / `redteam eval` 可能调用外部模型 API，执行前向用户确认目标系统与所用的 API Key 已配置。
 - 红队测试属于对目标系统的主动测试，Agent 应仅在用户明确要求时执行第 5 章。
 - 每完成一章，向用户汇报当前状态与下一步计划。

@@ -5,16 +5,21 @@
 本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 **Ubuntu 22.04 / 24.04 x86_64** 上以 **kubeadm + containerd + flannel** 部署 Kubernetes 集群：支持**单节点**（单 control-plane）与**多节点**（加 worker）两种形态，并完成验证。
 Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；安装部分幂等，已完成的步骤会自动跳过。
 
-**镜像一律优先国内源**（见 4.2 的镜像源清单与选源方法）；k8s 组件安装包走官方 apt 源（见第 2 章）。
+**镜像一律优先国内源**（见 4.2 的镜像源清单与选源方法）；k8s 组件安装包走官方 apt 源 `pkgs.k8s.io`（见第 2 章），官方源间歇 403 时改用清华/中科大镜像。
 
-本手册的落地实例：`192.168.40.189`（Ubuntu 24.04.2 / 24C / 62G / 98G，control-plane）+ `192.168.40.183`（Ubuntu 22.04 / 8C / 16G，worker，hostname `ubunt-dev`），部署结果为 **v1.37.2** 两节点集群，两台机器上的 Docker 与 Kubernetes **共用各自的 containerd**。
+本手册的落地实例：`192.168.40.189`（Ubuntu 24.04.2 / 24C / 62G / 98G，control-plane，hostname `ubuntu`）+ `192.168.40.183`（Ubuntu 22.04 / 8C / 16G，worker，hostname `ubunt-dev`）+ `192.168.40.187`（Ubuntu 24.04.2 / 16C / 43G，worker，hostname `ubuntu-stage`），部署结果为 **v1.37.2** 三节点集群，各机器上的 Docker 与 Kubernetes **共用各自的 containerd**。
+
+> **实测基线（2026-11-15）**：`.187` 按第 2/3/4/5.1 章加入，`kubeadm join` 一次成功，节点 `Ready` 且角色 `worker`；跨节点 Pod 互通（187↔189、187↔183）全部通过，真实工作负载 `ai-weekly` 已调度到该节点并 Running。
+>
+> 跨组件的实操要点、镜像源实测数据与共性踩坑速查见 [linux-provisioning-playbook.md](linux-provisioning-playbook.md)。
 
 ## 0. 参数区（执行前由用户确认或使用默认值）
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `K8S_VERSION` | `v1.37.2` | Kubernetes 版本；`stable` 时取 <https://dl.k8s.io/release/stable.txt> |
-| `K8S_APT_REPO` | `https://pkgs.k8s.io/core:/stable:/v1.37/deb/` | k8s 官方 apt 仓库（pkgs.k8s.io），版本号随 `K8S_VERSION` 调整 |
+| `K8S_APT_REPO` | `https://pkgs.k8s.io/core:/stable:/v1.37/deb/` | k8s 官方 apt 仓库（pkgs.k8s.io），**路径用 minor 版本 `v1.37`**，不是完整版本 `v1.37.2` |
+| `K8S_APT_MIRROR` | 空（用官方源） | 官方源 403 时填 `https://mirrors.tuna.tsinghua.edu.cn/kubernetes`（或 `https://mirrors.ustc.edu.cn/kubernetes`）；拼接方式 `<前缀>/core:/stable:/<minor>/deb` |
 | `NODE_NAME` | `ubuntu` | 节点名，取 `hostname` |
 | `ADVERTISE_IP` | `192.168.40.189` | apiserver 广播地址，取本机内网 IP |
 | `POD_CIDR` | `10.244.0.0/16` | Pod 网段，需与 flannel 默认值一致 |
@@ -68,12 +73,20 @@ hostname; getent hosts $(hostname)
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
 
-# 官方 apt 源密钥
-sudo curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.37/deb/Release.key \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+# 仓库路径必须用 minor 版本（v1.37）；写成 v1.37.2 会 404
+K8S_MINOR="v1.37"                                     # 由 K8S_VERSION 推导: ${K8S_VERSION%.*}
+K8S_APT_BASE="${K8S_APT_MIRROR:-https://pkgs.k8s.io}"  # 官方源 403 时换成清华/中科大镜像
+K8S_REPO="${K8S_APT_BASE}/core:/stable:/${K8S_MINOR}/deb"
+
+# 签名 key：pkgs.k8s.io 会 302 到 CloudFront，偶发 403/超时，必须重试
+for i in 1 2 3 4 5; do
+  sudo curl -fsSL -m 30 -o /tmp/k8s-release.key "${K8S_REPO}/Release.key" && break
+  echo "Release.key 下载失败（第 $i 次），5s 后重试"; sleep 5
+done
+sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
 
 # apt 仓库（注意结尾是 /，不是发行版代号）
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.37/deb/ /' \
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] ${K8S_REPO}/ /" \
   | sudo tee /etc/apt/sources.list.d/kubernetes.list
 
 sudo apt-get update
@@ -81,7 +94,8 @@ sudo apt-get install -y kubelet kubeadm kubectl
 sudo apt-mark hold kubelet kubeadm kubectl   # 防止被常规升级误升级
 ```
 
-> `apt-mark hold` 幂等。**注意区分两类源**：k8s 组件*安装包*走官方 `pkgs.k8s.io`（实测可达；国内 aliyun 的 kubernetes apt 源对 22.04/24.04 支持不全，需先验证 `dists/kubernetes-<代号>/InRelease` 是否存在）；而*容器镜像*一律走 4.2 的国内源。
+> `apt-mark hold` 幂等。**注意区分两类源**：k8s 组件*安装包*走 `pkgs.k8s.io`（或其中科大/清华镜像）；而*容器镜像*一律走 4.2 的国内源。
+> **国内镜像前缀**：`https://mirrors.tuna.tsinghua.edu.cn/kubernetes/core:/stable:/v1.37/deb`、`https://mirrors.ustc.edu.cn/kubernetes/core:/stable:/v1.37/deb` 均实测可用（2026-11-15）。不要用阿里云 `mirrors.aliyun.com/kubernetes/apt`（对 22.04/24.04 支持不全）。
 
 ## 3. 系统配置（内核模块 / sysctl / swap）
 
@@ -143,19 +157,25 @@ grep -n "SystemdCgroup\|config_path" /etc/containerd/config.toml
 | 上游 | 推荐国内源 | 备用 | 说明 |
 | --- | --- | --- | --- |
 | `registry.k8s.io` | `k8s.m.daocloud.io` | `docker.imgdb.de/registry.k8s.io`（不稳定） | 保留完整仓库路径（`coredns/coredns`） |
-| `docker.io` | `docker.m.daocloud.io` 或 `docker.1ms.run` | — | **两者按节点二选一**，见下方选源方法 |
+| `docker.io` | `hub.rat.dev` | `docker.1panel.live`、`docker.xuanyuan.me`、`docker.1ms.run`、`docker.m.daocloud.io` | **按节点实测排序**，见下方选源方法。2026-11-15 实测 `hub.rat.dev` 最快（nginx:1.27 约 1.5s），`1ms`/`daocloud` 大镜像仅 1.5 KiB/s |
 | `ghcr.io` | `ghcr.m.daocloud.io` | — | flannel CNI 插件镜像 |
 
-**选源方法（部署前必做）**：同一镜像源在不同机器上的链路可能不同——实测 `.189` 上 `docker.m.daocloud.io` 的 blob 被代理拦截（407），而 `.183` 上 `docker.1ms.run` 极慢（< 100 KiB/s）。先测再选：
+**选源方法（部署前必做）**：同一镜像源在不同机器、不同时间段表现可能不同。**小镜像（alpine）测速会失真**——小镜像可能被镜像源边缘缓存，测出很快，但大镜像（如 nginx）仍可能只有几 KiB/s。应用**未缓存的较大镜像**测：
 
 ```bash
-for m in docker.m.daocloud.io docker.1ms.run; do
-  printf '%s: ' "$m"
-  /usr/bin/time -f '%e s' timeout 120 ctr -n k8s.io images pull "$m/library/alpine:3.20" >/dev/null 2>&1 && echo OK || echo FAIL
+# 逐个测未缓存的大镜像（nginx:1.27 约 100MB），记录耗时
+for m in hub.rat.dev docker.1panel.live docker.xuanyuan.me docker.1ms.run docker.m.daocloud.io; do
+  printf '%-24s ' "$m"
+  s=$(date +%s%N)
+  timeout 90 ctr -n k8s.io images pull "$m/library/nginx:1.27" >/tmp/m.log 2>&1 \
+    && echo "OK  $(( ($(date +%s%N)-s)/1000000 ))ms" || echo "FAIL/超时"
+  ctr -n k8s.io images rm "$m/library/nginx:1.27" >/dev/null 2>&1
 done
 ```
 
-把最快的源写在 `docker.io` 的 `hosts.toml` **首位**，其余作为备用。
+把最快的源写在 `docker.io` 的 `hosts.toml` **首位**，其余作为备用（containerd 会按顺序回退）。
+
+> **实测记录（2026-11-15，`.187`）**：`hub.rat.dev` 1.5s、`docker.1panel.live` 21.8s、`docker.xuanyuan.me` 14.8s、`docker.1ms.run` 与 `docker.m.daocloud.io` 均 < 6 KiB/s（且 1ms 开始返回 `UNAUTHORIZED` 需联系客服）；`dockerpull.org`、`docker.nju.edu.cn`、`docker.mirrors.ustc.edu.cn` 不可达。免费镜像源会集体劣化，排障时先重测再下结论。
 
 ```bash
 sudo mkdir -p /etc/containerd/certs.d/{registry.k8s.io,docker.io,ghcr.io}
@@ -168,7 +188,7 @@ server = "https://registry.k8s.io"
   capabilities = ["pull", "resolve"]
 EOF
 
-# docker.io -> 国内源（默认 1ms 优先；若本机 daocloud 更快则调换顺序，见上方选源方法）
+# docker.io -> 多源回退（按节点实测排序；镜像源会分钟级波动，务必保留多个备用）
 cat <<'EOF' | sudo tee /etc/containerd/certs.d/docker.io/hosts.toml
 server = "https://docker.io"
 
@@ -176,6 +196,15 @@ server = "https://docker.io"
   capabilities = ["pull", "resolve"]
 
 [host."https://docker.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://hub.rat.dev"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://docker.1panel.live"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://docker.xuanyuan.me"]
   capabilities = ["pull", "resolve"]
 EOF
 
@@ -281,6 +310,8 @@ kubeadm join 192.168.40.189:6443 --token <token> \
 ```
 
 成功标志：`This node has joined the cluster` 并打印 Certificate exchange。
+
+> **实测记录（2026-11-15，`.187` 加入）**：`kubeadm join` 一次成功；新节点 hostname `ubuntu-stage` 与现有节点不重名且 `getent hosts` 可解析。join 后 flannel/kube-proxy/node-exporter 自动部署，节点 `Ready`；随后 `kubectl label node ubuntu-stage node-role.kubernetes.io/worker=""` 使 ROLES 显示 `worker`（与 `.183` 一致）。
 
 #### 5.1.4 验证
 
@@ -465,6 +496,8 @@ journalctl -u kubelet --no-pager -n 50
 - **`docker.io` blob 指向 `image-mirror.r2.daocloud.vip` 超时（407/超时）**：说明本机 daocloud 的 blob 链路不通。把 `docker.io` 的 host 顺序改为 `docker.1ms.run` 在前（或按 4.2 选源方法重测）；反之若 1ms 慢则把 daocloud 提前。
 - **`ghcr.io` TLS handshake timeout**：确认 `/etc/containerd/certs.d/ghcr.io/hosts.toml` 指向 `ghcr.m.daocloud.io`。
 - **镜像源本身失效**：用 `curl -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' https://<mirror>/v2/<repo>/manifests/<tag>` 探测候选源（401 表示可达且需 token，200 表示有该镜像），换用可用源后重启 containerd。
+- **kubelet 日志出现 `read tcp ... connection timed out` / `failed to copy`**：镜像源链路劣化。先看 `journalctl -u kubelet` 里 `totalImagesPullingTime`（排队+拉取总耗时）判断是偶发还是持续；持续则按 4.2 换源。
+- **测试 Pod 长时间 ContainerCreating 而镜像已缓存**：kubelet 对镜像拉取**串行化**（`imagePullSessionsCount`），一个慢拉取会阻塞同节点后续 Pod。冒烟测试建议用 `imagePullPolicy: IfNotPresent` + 已缓存镜像（见 5.1.4）。
 
 ### 8.2 节点 NotReady
 
@@ -499,6 +532,17 @@ docker ps
 
 > 长期方案：若不能容忍 Docker 中断，可为 k8s 单独跑一个 containerd 实例（独立 `--config`/`--root`/`--state` 与 socket），并在 kubeadm 的 `nodeRegistration.criSocket` 指向它。
 
+### 8.5 k8s 组件安装失败（apt 源 403 / 404）
+
+```bash
+cat /etc/apt/sources.list.d/kubernetes.list   # 核对 URL
+curl -sI https://pkgs.k8s.io/core:/stable:/v1.37/deb/InRelease | head -3
+```
+
+- **404 Not Found**：仓库路径用了完整版本（`v1.37.2`）。必须是 **minor 版本 `v1.37`**（见第 2 章）。
+- **403 Forbidden（CloudFront）**：`pkgs.k8s.io` 会 302 到 `prod-cdn.packages.k8s.io`，间歇性拒绝 apt 请求（同一 URL 用 curl 可能 200）。改用清华/中科大镜像：把 `kubernetes.list` 的 URI 换成 `https://mirrors.tuna.tsinghua.edu.cn/kubernetes/core:/stable:/v1.37/deb/`（或 USTC），`Release.key` 同地址重下一次（已装 key 可复用，指纹 `isv:kubernetes` 一致）。
+- **签名校验失败导致 `Ign: ... InRelease`**：多为 key 未装好或 URL 不匹配；用 `gpg --show-keys --with-fingerprint` 核对是否为 `isv:kubernetes`。
+
 ## 9. Agent 执行注意事项
 
 - **先检查再执行**：每章先做只读检查，已完成内容自动跳过；`/etc/kubernetes/admin.conf` 存在即视为已 init。
@@ -507,6 +551,9 @@ docker ps
 - **共用 containerd 的告警**：若目标机已运行 Docker 容器，第 4 章重启 containerd 前必须告知用户影响面与业务容器重启策略。
 - **不要使用 kubeadm `imageRepository` 指向镜像站**（coredns 路径丢失），改用 containerd `certs.d`。
 - **不要 `apt upgrade` 升级 k8s 组件**：已 `apt-mark hold`；升级需显式 `apt-mark unhold` 并按版本逐个升级。
+- **k8s apt 源用 minor 版本路径**（`v1.37` 而非 `v1.37.2`），否则 404；官方源 403 时换清华/中科大镜像（见 8.5）。
+- **改镜像源后重启 containerd 前先评估影响面**：控制面节点上跑着 Harbor / ingress 等业务，重启会短暂中断；worker 节点也建议选低峰期。若只需新增/调换 `certs.d` 条目，可先不重启、观察 kubelet 是否已按新配置拉取（containerd 会按需重载），无效再重启。
+- **测试镜像优先用节点已缓存的 tag**：跨节点冒烟时给测试 Pod 加 `imagePullPolicy: IfNotPresent`，避免镜像源抖动掩盖真实的网络问题。
 - 每完成一章，向用户汇报当前状态与下一步计划。
 
 ## 10. 卸载（可选，破坏性，需用户确认）

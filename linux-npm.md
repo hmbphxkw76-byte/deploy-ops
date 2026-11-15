@@ -5,6 +5,10 @@
 本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 **Linux / Unix（默认 Ubuntu）** 上自动完成 Node.js（nvm）安装、npm/pnpm 镜像配置、缓存维护与常见问题排查，适用于本地开发和 CI 环境。
 Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；配置类步骤幂等，已完成的会自动跳过。涉及删除文件的操作必须先经用户确认。
 
+> **实测基线（2026-11-15）**：Ubuntu 24.04.2 LTS / x86_64 / root，从零安装。nvm 0.40.3 + Node v24.22.3（npm 11.19.1）+ pnpm 12.21.0，npm 与 pnpm registry 均为 `https://registry.npmmirror.com`，`bash -lc 'node --version'` 正常。本环境 **`raw.githubusercontent.com` 不可达（连接超时，HTTP 000）**，`github.com`、`ghfast.top`、`npmmirror.com` 可达。
+>
+> 跨组件的实操要点与镜像源实测数据见 [linux-provisioning-playbook.md](linux-provisioning-playbook.md)。
+
 ## 0. 参数区（执行前由用户确认或使用默认值）
 
 | 参数 | 默认值 | 说明 |
@@ -43,8 +47,16 @@ pnpm --version 2>/dev/null || echo "PNPM_NOT_INSTALLED"
 ### 2.1 安装 nvm
 
 ```bash
-# 安装 nvm（若前置检查已显示 NVM_INSTALLED 则跳过；raw.githubusercontent.com 不可达时可在地址前加代理前缀，如 https://ghfast.top/）
-curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION:-v0.40.3}/install.sh" | bash
+# 安装 nvm（若前置检查已显示 NVM_INSTALLED 则跳过）
+# 注意：install.sh 内部优先用 git clone github.com 拉取仓库（而非只下载 install.sh）；
+# 因此即使 raw.githubusercontent.com 不可达，只要 github.com 可达就能装成功。
+# 仍建议先直接下载，失败时代理前缀兜底（实测本环境前者超时、后者正常）：
+NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION:-v0.40.3}/install.sh"
+if ! curl -fsSL -m 30 -o /tmp/nvm-install.sh "$NVM_INSTALL_URL"; then
+  echo "raw.githubusercontent.com 不可达，改用 ghfast.top 代理前缀"
+  curl -fsSL -m 90 -o /tmp/nvm-install.sh "https://ghfast.top/${NVM_INSTALL_URL}"
+fi
+bash /tmp/nvm-install.sh
 
 # 加载 nvm（当前会话）
 export NVM_DIR="$HOME/.nvm"
@@ -99,8 +111,10 @@ npm cache clean --force  # 清理缓存（安装失败时使用）
 **方式一：npm 全局安装（国内镜像加速，推荐）**
 
 ```bash
-npm install -g "pnpm@${PNPM_VERSION:-latest}"
+npm install -g "pnpm@${PNPM_VERSION:-latest}" --allow-scripts=pnpm
 ```
+
+> **npm ≥ 11 注意**：新版 npm 默认不执行依赖的安装脚本，会打印 `npm warn install-scripts ... Run npm install -g --allow-scripts=<pkg>`。pnpm 不执行脚本也能正常工作，但显式加 `--allow-scripts=pnpm` 可消除警告。旧版 npm 不认识该参数（报 `Unknown cli config`）时去掉即可。
 
 **方式二：独立脚本（不依赖 Node.js，系统全新时可用）**
 
@@ -160,6 +174,9 @@ pnpm --version
 | 全局安装权限报错 | 禁止 `sudo npm install -g`；应使用 nvm 管理版本，或修复全局目录权限 |
 | `nvm install stable` 装出预发布版 | npmmirror 的 node 版本索引含预发布版（如 `v27.0.0-alpha.0.0.0`），nvm 按 semver 取最高会选中 alpha。改用显式版本 `nvm install 24`（或 `nvm install --lts`），并 `nvm uninstall` 误装版本 |
 | SSH 非交互会话 `node`/`nvm` 不可用 | Ubuntu 默认 `~/.bashrc` 对非交互 shell 提前 `return`，nvm 初始化块不执行。将 nvm 初始化（含 `NVM_NODEJS_ORG_MIRROR`）追加到 `~/.profile`，`bash -lc 'node --version'` 验证 |
+| `raw.githubusercontent.com` 连接超时（HTTP 000） | 先确认 `github.com` 是否可达：nvm 的 `install.sh` 内部用 `git clone` 拉仓库，github.com 通则安装不受影响。仍失败时在脚本地址前加代理前缀（如 `https://ghfast.top/`）重试 |
+| npm 全局安装报 `npm warn install-scripts` | npm ≥ 11 默认不执行包的安装脚本。加 `--allow-scripts=<pkg>`（或 `npm config set allow-scripts=<pkg> --location=user`）；旧版 npm 报 `Unknown cli config` 时去掉该参数 |
+| `pnpm config get registry` 输出带结尾 `/` | pnpm 会将 registry 归一化为带尾斜杠（`https://registry.npmmirror.com/`），与 npm 的值等价，不是配置错误 |
 | 依赖安装失败 | 先 `npm cache clean --force` 后重试；仍失败时删除 `node_modules` 与 lock 文件重装（npm 为 `package-lock.json`，pnpm 为 `pnpm-lock.yaml`；**删除前必须经用户确认**） |
 
 ```bash
@@ -204,6 +221,8 @@ pnpm 项目改用：
 - nvm 安装脚本只修改当前用户的 shell 配置，Agent 执行后需 `source ~/.nvm/nvm.sh` 或新开 shell 才能使用 `nvm`；如需在 SSH 非交互会话可用，将 nvm 初始化追加到 `~/.profile`（见第 2.1 章）。
 - pnpm 独立脚本安装只修改当前用户的环境变量，需新开终端（或重载 PATH）后 `pnpm` 命令才生效。
 - 修改 registry 前先读取当前值（npm 与 pnpm 各读一次），避免覆盖用户自定义源。
+- **先探测再安装**：安装前用 `curl -s -o /dev/null -m 8 -w 'HTTP:%{http_code} %{time_total}s\n' <镜像地址>` 逐个探测 npmmirror / github / 代理前缀，按实际连通性决定源，不要盲目照抄文档默认值。
+- **非交互 SSH 验证一律用登录 shell**：`bash -lc 'node --version'`；直接 `ssh host 'node --version'` 可能因 `~/.bashrc` 提前 return 而失败（即使安装正确）。
 - 每完成一章，向用户汇报当前状态与下一步计划。
 
 ## 参考链接
