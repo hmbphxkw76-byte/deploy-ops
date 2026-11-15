@@ -159,8 +159,8 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```text
 按顺序执行并逐步汇报：
 1. GitLab Runner：注册 Runner 并跑通一条最小流水线（构建 → push Harbor）
-2. kubernetes-argocd.md 第 0 章：安装 Argo CD（NodePort），验证 /api/health
-3. kubernetes-argocd.md 第 6.3/6.4 节：接入 GitLab 私有仓库凭据 + 创建 root Application（app-of-apps）
+2. kubernetes-argocd.md 第 0 章：安装 Argo CD（NodePort），验证 /healthz
+3. kubernetes-argocd.md 第 6.3/6.4 节：接入 GitLab 私有仓库凭据 + 创建 root Application / ApplicationSet
 4. 选一个应用试点：GitLab CI 更新 manifests 仓库的 image tag → Argo CD 自动 sync
 ```
 
