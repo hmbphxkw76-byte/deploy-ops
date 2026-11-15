@@ -1,0 +1,33 @@
+# Argo CD Ingress —— 域名 argocd.lan + cert-manager 自动签发（ClusterIssuer lab-ca）
+# 前置：ingress-nginx（ingressClassName: nginx）+ cert-manager + ClusterIssuer lab-ca
+# 用法: kubectl apply -f argocd-ingress.yaml
+#
+# 说明：
+# - backend-protocol HTTPS：ingress-nginx 用证书终结 TLS 后，再以 HTTPS 回源到
+#   argocd-server（其本身已启用 TLS，见 kubernetes-argocd.md）。
+# - CLI 仍走 NodePort 30701（gRPC 需要单独的 GRPC Ingress，见手册）。
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+  annotations:
+    cert-manager.io/cluster-issuer: lab-ca
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["argocd.lan"]
+      secretName: argocd-server-tls       # 由 cert-manager 自动创建（Ready 后生效）
+  rules:
+    - host: argocd.lan
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 443

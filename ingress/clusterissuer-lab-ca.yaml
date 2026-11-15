@@ -1,0 +1,12 @@
+# ClusterIssuer（CA 类型）—— 用自建 Lab Argo CD CA 签发证书
+# 前置：把 CA 证书/私钥做成 Secret（放在 cert-manager 所在命名空间）：
+#   kubectl -n cert-manager create secret tls lab-ca-key-pair \
+#     --cert=/root/argocd-deploy/tls/ca.crt --key=/root/argocd-deploy/tls/ca.key
+# 用法: kubectl apply -f clusterissuer-lab-ca.yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: lab-ca
+spec:
+  ca:
+    secretName: lab-ca-key-pair

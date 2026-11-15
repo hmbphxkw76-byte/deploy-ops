@@ -15,7 +15,7 @@
 | chart | `argo-cd-10.18.0`（GitHub Releases tgz） |
 | app | **v3.6.1**（BuildDate 2026-11-04） |
 | 集群 | v1.37.2，控制面 `ubuntu` 192.168.40.189 + 工作节点 `ubunt-dev` 192.168.40.183 |
-| 访问 | `https://192.168.40.189:30701`（NodePort 30700/30701 均已启用 TLS，推荐 30701） |
+| 访问 | 域名 **`https://argocd.lan`**（ingress-nginx hostPort 443，证书由 cert-manager + 自建 CA 签发）；直连 `https://192.168.40.189:30701`（NodePort，CLI 用） |
 | TLS | 自建 CA（`/root/argocd-deploy/tls/ca.crt`）签发，CN=`argocd.lan`，SAN 含 IP `192.168.40.189`；已装入节点系统信任库 |
 | 组件 | 5 个 Pod 全 Running（server / repo-server / application-controller / applicationset-controller / redis） |
 | 仓库接入 | GitLab `ops/k8s-apps`（bot `argocd-bot` + PAT，`configs.repositories` 声明式登记） |
@@ -558,7 +558,8 @@ kubectl -n argocd rollout restart deploy/argocd-server
 > - **macOS**：双击 `ca.crt` 导入「钥匙串访问」并设为始终信任。
 > - **Firefox**：使用自带证书库，需在 设置 → 隐私与安全 → 证书 中导入。
 > **回退明文**：`configs.params.server.insecure: true`（键名注意是 `configs.params`）后 `helm upgrade`；此时 30700/30701 都会变成明文 HTTP。
-> 上生产：建议改为 Ingress + cert-manager（chart 的 `server.certificate` 已内置 Certificate 资源）或接入真实 CA。
+> **已升级为 Ingress 入口（实测）**：集群已部署 ingress-nginx + cert-manager，用自建 CA 做 `ClusterIssuer lab-ca` 自动签发，UI 走 **`https://argocd.lan`**（hostPort 443，HTTP 30081 自动 308 跳转）。详见 [kubernetes-ingress-cert-manager.md](kubernetes-ingress-cert-manager.md)（含 values、Ingress 清单与验证脚本）。
+> 上生产：可改用 ACME（Let's Encrypt）或企业 CA；gRPC（CLI）如需走域名要额外配 `backend-protocol: GRPC` 的 Ingress。
 
 ## 4. 镜像源最佳实践（containerd `certs.d`）
 
@@ -736,6 +737,8 @@ NODE_IP=192.168.40.189; PORT=30701
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d 2>/dev/null || echo "（已删除，密码已轮换）"
 # 浏览器打开（HTTPS；已导入 CA 时无告警，未导入则接受告警即可）
 echo "https://${NODE_IP}:${PORT}"
+# 已部署 ingress + cert-manager 时，用域名（客户端需 hosts/DNS 指向节点 IP）：
+echo "https://argocd.lan   # 见 kubernetes-ingress-cert-manager.md"
 # 健康检查（Argo CD 3.x 的端点是 /healthz，返回 200 + 正文 ok；/api/health 返回 404）
 curl -s "https://${NODE_IP}:${PORT}/healthz"; echo      # 已导入 CA；否则用 curl -k
 ```
@@ -1156,6 +1159,7 @@ kubectl delete ns argocd
 
 - TLS 已启用（自建 CA，`https://192.168.40.189:30701`）；**其他客户端需导入 `ca.crt`**，否则会有证书告警。上生产建议改 Ingress + cert-manager 或接入真实 CA（第 7 章第 13 条）。
 - **未接 SSO**：仅 admin 本地账号；多人使用需开 dex + GitLab OAuth（第 7 章第 20 条）。admin 密码已轮换，新密码在节点 `/root/argocd-deploy/.adminpass`（`argocd-initial-admin-secret` 已删除；找回方法见 6.1）。
+- **CLI 未走域名**：UI 已走 `https://argocd.lan`（ingress），但 Argo CD CLI（gRPC）仍用 NodePort 30701；如需统一入口，另建 `backend-protocol: GRPC` 的 Ingress（见 kubernetes-ingress-cert-manager.md 8.3）。
 - **未配监控/告警**：Argo CD 暴露 `:8082`/`:8083` 指标，需要时接 Prometheus。
 - **Redis 无持久化**：重启后缓存重建，属预期。
 - **`99-smoke` 验证应用仍在集群**（命名空间 `99-smoke`，1 Pod）；确认不需要后可按 6.4 的方式从 `k8s-apps` 删除目录并同步。

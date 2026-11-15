@@ -28,7 +28,9 @@
 | [kubernetes-gitlab.md](kubernetes-gitlab.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署极狐 GitLab（外置 PostgreSQL / Redis / MinIO，国内镜像源） |
 | [linux-gitlab.md](linux-gitlab.md) | Linux（Ubuntu） | 独立 Docker 部署 GitLab CE（不接入 K8s，国内镜像源） |
 | [kubernetes-argocd.md](kubernetes-argocd.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Argo CD（GitOps 持续交付，NodePort + 国内镜像源） |
-| [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → 验证，幂等） |
+| [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → TLS → 验证，幂等） |
+| [kubernetes-ingress-cert-manager.md](kubernetes-ingress-cert-manager.md) | Kubernetes（Ubuntu） | 部署 ingress-nginx + cert-manager，用自建 CA 签证书（域名入口 + 自动签发） |
+| [ingress/](ingress/) | Kubernetes（Ubuntu） | 上述部署的 values 与清单（ingress-nginx / cert-manager / ClusterIssuer / Argo CD Ingress / 验证脚本） |
 
 ## 选型与决策记录
 
@@ -137,12 +139,13 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ### Argo CD（kubernetes-argocd.md）
 
 ```text
-1. 部署：按 kubernetes-argocd.md 第 0 章用 kubernetes-argocd-install.sh 一键安装（NodePort + HTTP），执行前向我确认参数区参数。
-2. 接入：按第 6.3 节建 GitLab 仓库凭据 Secret，按第 6.4 节创建 root Application（app-of-apps）。
-3. 排障：应用一直 OutOfSync / SyncFailed，按第 8.3 节定位（repo server 日志 + 凭据 label）。
+1. 部署：按 kubernetes-argocd.md 第 0 章用 kubernetes-argocd-install.sh 一键安装（NodePort + TLS，默认 TLS_MODE=ca），执行前向我确认参数区参数。
+2. 接入：按第 6.3 节登记 Git 仓库凭据（configs.repositories），按第 6.4 节创建 root Application / ApplicationSet。
+3. 域名入口：按 kubernetes-ingress-cert-manager.md 部署 ingress-nginx + cert-manager，UI 走 https://argocd.lan。
+4. 排障：应用一直 OutOfSync / SyncFailed，按第 8.3 节定位（repo server 日志 + configs.repositories）。
 ```
 
-预期行为：quay.io 镜像走 containerd 镜像源；只用稳定版（拒装 rc/beta）；CI 只改 manifests、由 Argo CD 负责 sync；初始密码只从 Secret 读取，不写仓库。
+预期行为：quay.io / registry.k8s.io 镜像走 containerd 镜像源；只用稳定版（拒装 rc/beta）；CI 只改 manifests、由 Argo CD 负责 sync；凭据只进 Secret / 本地 values，不写仓库。
 
 ### Ollama（linux-ollama.md）
 
@@ -159,12 +162,25 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```text
 按顺序执行并逐步汇报：
 1. GitLab Runner：注册 Runner 并跑通一条最小流水线（构建 → push Harbor）
-2. kubernetes-argocd.md 第 0 章：安装 Argo CD（NodePort），验证 /healthz
-3. kubernetes-argocd.md 第 6.3/6.4 节：接入 GitLab 私有仓库凭据 + 创建 root Application / ApplicationSet
-4. 选一个应用试点：GitLab CI 更新 manifests 仓库的 image tag → Argo CD 自动 sync
+2. kubernetes-argocd.md 第 0 章：安装 Argo CD（NodePort + TLS），验证 /healthz
+3. kubernetes-argocd.md 第 6.3/6.4 节：登记 GitLab 仓库凭据 + 创建 root Application / ApplicationSet
+4. kubernetes-ingress-cert-manager.md：部署 ingress-nginx + cert-manager，UI 走 https://argocd.lan
+5. 选一个应用试点：GitLab CI 更新 manifests 仓库的 image tag → Argo CD 自动 sync
 ```
 
-预期行为：同一批 K8s 资源只由 Argo CD 管理（不再用 CI 里的 helm upgrade 并管）；root Application 加 finalizer；CI 侧不直接操作集群。
+预期行为：同一批 K8s 资源只由 Argo CD 管理（不再用 CI 里的 helm upgrade 并管）；root Application 加 finalizer；CI 侧不直接操作集群；客户端信任一次自建 CA 后域名访问无告警。
+
+### 平台入口与自动证书（域名 + 443）
+
+```text
+按 kubernetes-ingress-cert-manager.md 执行：
+1. 确认宿主机 443 空闲（ss -ltnp），选定固定节点
+2. 部署 ingress-nginx（hostPort 443）与 cert-manager
+3. 用自建 CA 建 ClusterIssuer lab-ca，为 Argo CD 建 Ingress（https://argocd.lan）
+4. 跑 ingress/ingress_verify.sh（7 项全 PASS）
+```
+
+预期行为：80 被占用时不强行抢占（HTTP 走 30081 自动 308 跳转）；CA 私钥不入库；客户端未导入 CA 时明确提示告警而非静默。
 
 ### 新 Ubuntu 服务器初始化
 

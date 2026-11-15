@@ -1,0 +1,20 @@
+# cert-manager Helm values —— 实测基线（2026-11-15，192.168.40.189）
+# 用法: helm install cert-manager <chart.tgz> -n cert-manager --create-namespace -f cert-manager-values.yaml
+crds:
+  enabled: true
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {cpu: 500m, memory: 256Mi}
+
+webhook:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+cainjector:
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+# 镜像为 quay.io/jetstack/*，由 containerd certs.d 映射 quay.io → quay.m.daocloud.io

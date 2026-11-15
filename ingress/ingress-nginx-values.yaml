@@ -1,0 +1,29 @@
+# ingress-nginx Helm values —— 实测基线（2026-11-15，192.168.40.189）
+# 用法: helm install ingress-nginx <chart.tgz> -n ingress-nginx --create-namespace -f ingress-nginx-values.yaml
+controller:
+  replicaCount: 1
+
+  # 宿主机 80 被 Docker 容器（aivp-web-1）占用，443 空闲
+  # → 仅把 443 暴露为 hostPort；80 走 NodePort 30081（用于 HTTP→HTTPS 跳转）
+  hostPort:
+    enabled: true
+    ports:
+      http: 30081
+      https: 443
+
+  service:
+    type: NodePort
+    nodePorts:
+      http: 30081
+      https: 30443
+
+  # 固定到控制面（已确认 443 空闲），保证 域名 → IP 稳定
+  nodeSelector:
+    kubernetes.io/hostname: ubuntu
+
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+  # 镜像（chart 默认 registry.k8s.io/ingress-nginx/*）
+  # 由 containerd certs.d 映射 registry.k8s.io → k8s.m.daocloud.io，无需在此改写
