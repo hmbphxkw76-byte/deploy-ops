@@ -205,11 +205,22 @@ server:
     type: NodePort
     nodePortHttp: ${NODEPORT_HTTP}
     nodePortHttps: ${NODEPORT_HTTPS}
+  resources:                    # 最终部署基线（避免 noisy-neighbor / OOM）
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
 
 controller:
   replicas: 1
-repo:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 1, memory: 2Gi}
+
+# ⚠️ chart 的键名是 repoServer（不是 repo）；写 repo 会被静默忽略
+repoServer:
   replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 1, memory: 1Gi}
 
 dex:
   enabled: false                 # 暂不接 SSO（省一个 ghcr 镜像）
@@ -217,12 +228,18 @@ notifications:
   enabled: false
 applicationSet:
   enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
 
 redis:
   enabled: true
   image:
     repository: ${REDIS_IMAGE_REPO}   # chart 默认 ecr-public.aws.com，国内建议改 docker.m.daocloud.io
     tag: ${REDIS_IMAGE_TAG}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 256Mi}
 redis-ha:
   enabled: false                 # chart 默认即 false；显式声明，避免误开 HA 子 chart
 
@@ -253,6 +270,9 @@ grep -q 'kind: StatefulSet' /tmp/argocd-rendered.yaml \
   || die "渲染结果缺少 StatefulSet（application-controller）"
 grep -q 'server.insecure: "true"' /tmp/argocd-rendered.yaml \
   || die "渲染结果未启用 server.insecure（检查 configs.params 写法）"
+# ⚠️ 重复 YAML 键会被 helm 静默取最后一个（曾导致 server.service 丢失、NodePort 消失）
+grep -q "nodePort: ${NODEPORT_HTTP}" /tmp/argocd-rendered.yaml \
+  || die "渲染结果缺少 nodePort ${NODEPORT_HTTP}（检查 values 是否有重复键）"
 if grep -q 'dexidp/dex' /tmp/argocd-rendered.yaml; then
   die "dex 未成功禁用（渲染结果仍含 dexidp/dex 镜像）"
 fi
@@ -511,7 +531,7 @@ grep -E '^(appVersion|version):' argo-cd/Chart.yaml
 保存为 `/root/argocd-deploy/argocd-values.yaml`（**勿提交仓库**，含仓库凭据）。参数含义见第 1 章。
 
 ```yaml
-# Argo CD values —— 参数区见第 1 章（2026-11-15 实测）
+# Argo CD values —— 参数区见第 1 章（2026-11-15 最终部署基线）
 global:
   image:
     imagePullPolicy: IfNotPresent
@@ -522,11 +542,21 @@ server:
     type: NodePort
     nodePortHttp: 30700
     nodePortHttps: 30701
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
 
 controller:
   replicas: 1
-repo:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 1, memory: 2Gi}
+
+repoServer:                    # ⚠️ 键名是 repoServer，不是 repo（写 repo 会被静默忽略）
   replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 1, memory: 1Gi}
 
 dex:
   enabled: false                    # 暂不接 SSO（省 ghcr 镜像）
@@ -534,12 +564,18 @@ notifications:
   enabled: false
 applicationSet:
   enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
 
 redis:
   enabled: true
   image:
     repository: docker.m.daocloud.io/library/redis   # chart 默认 ecr-public.aws.com，国内慢
     tag: 8.6.4-alpine
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 256Mi}
 redis-ha:
   enabled: false                    # chart 默认即 false，显式声明
 
@@ -555,7 +591,12 @@ configs:
       password: '<PAT>'
 ```
 
-> **key 名以实际 chart 为准**：`helm show values argo/argo-cd | grep -n 'insecure\|nodePortHttp'`。
+> **key 名以实际 chart 为准**：`helm show values argo/argo-cd | grep -n 'insecure\|nodePortHttp\|^repo'`。
+> ⚠️ **重复 YAML 键陷阱（实测）**：曾把 `resources` 追加成新的 `server:`/`repo:` 块，helm **静默取最后一个键**，`server.service` 直接丢失 → NodePort 消失、UI 拒绝连接。改完 values 后必须：
+> ```bash
+> python3 -c "import yaml,collections; d=yaml.safe_load(open('argocd-values.yaml')); print({k:list(v) for k,v in d.items() if isinstance(v,dict)})"
+> helm template argocd ./argo-cd -n argocd -f argocd-values.yaml | grep -c 'nodePort: 30700'
+> ```
 > **不需要 nodeSelector**：Argo CD 无本地卷（redis 不持久化），Pod 漂移无副作用——这是它比 Harbor/GitLab 省心之处。
 > **应用命名空间**：Application CR 默认只能放在 `argocd` 命名空间（controller 日志 `Enabled application namespace patterns: argocd`）。若要把 Application CR 放到别的命名空间，给 controller 加参数：`controller.extraArgs: ["--application-namespaces=*"]`（生产建议列明确名单，如 `--application-namespaces=argocd,prod`）。
 
@@ -599,13 +640,39 @@ kubectl -n argocd get pods -o wide
 
 ```bash
 NODE_IP=192.168.40.189; PORT=30700
-# 初始管理员密码（首次登录后请立即修改；密码只从 Secret 读取，不写仓库）
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+# 初始管理员密码（仅首次安装后存在；轮换后该 Secret 会被删除，见下方「密码轮换与找回」）
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d 2>/dev/null || echo "（已删除，密码已轮换）"
 # 浏览器打开（注意是 http，不是 https）
 echo "http://${NODE_IP}:${PORT}"
 # 健康检查（Argo CD 3.x 的端点是 /healthz，返回 200 + 正文 ok；/api/health 返回 404）
 curl -s "http://${NODE_IP}:${PORT}/healthz"; echo
 ```
+
+**密码轮换与找回（实测）**：
+
+```bash
+# —— 轮换（推荐：首次登录后立即执行）——
+OLD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)
+NEW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)
+echo "NEWPASS=$NEW" > /root/argocd-deploy/.adminpass      # 本地留存，勿提交仓库
+argocd account update-password --current-password "$OLD" --new-password "$NEW"
+argocd login 192.168.40.189:30700 --plaintext --username admin --password "$NEW"   # 验证
+kubectl -n argocd delete secret argocd-initial-admin-secret    # 官方建议：轮换后删除初始 Secret
+
+# —— 找回（实测：删了 initial secret 后重启 server 不会重建）——
+NEW=$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)
+HASH=$(python3 -c "import bcrypt,sys;print(bcrypt.hashpw(sys.argv[1].encode(),bcrypt.gensalt(rounds=10)).decode())" "$NEW")
+python3 - "$HASH" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" <<'PY'
+import json, subprocess, sys
+h, m = sys.argv[1], sys.argv[2]
+subprocess.run(["kubectl", "-n", "argocd", "patch", "secret", "argocd-secret",
+                "--type", "merge", "-p", json.dumps({"stringData": {"admin.password": h, "admin.passwordMtime": m}})], check=True)
+PY
+kubectl -n argocd rollout restart deploy/argocd-server      # 重启后生效
+# 用 NEW 登录验证
+```
+
+> `argocd-secret` 是 Argo CD 的机密源（含 `server.secretkey` 与仓库凭据），**只改 `admin.password` / `admin.passwordMtime` 两个键**，不要整表覆盖；改完必须重启 `argocd-server`。
 
 ### 6.2 安装 argocd CLI 并登录
 
@@ -834,7 +901,7 @@ chk() { if eval "$2" >/dev/null 2>&1; then echo "PASS: $1"; PASS=$((PASS+1)); el
 
 chk "全部 Pod Running/Completed" "test \$(kubectl -n $NS get pods --no-headers | grep -cE 'Running|Completed') -eq \$(kubectl -n $NS get pods --no-headers | wc -l)"
 chk "健康端点 /healthz"        "curl -s http://${NODE_IP}:${PORT}/healthz | grep -qx ok"
-chk "初始密码 Secret 存在"     "test -n \"\$(kubectl -n $NS get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' 2>/dev/null)\""
+chk "admin 密码已配置"          "kubectl -n $NS get secret argocd-secret -o json | grep -q admin.password"
 chk "server 为 NodePort"       "kubectl -n $NS get svc argocd-server -o jsonpath='{.spec.type}' | grep -q NodePort"
 chk "root Application 存在"    "kubectl -n $NS get application root --no-headers | grep -q ."
 chk "ApplicationSet 就绪"      "kubectl -n $NS get applicationset root -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}' | grep -q 'ResourcesUpToDate=True'"
@@ -883,6 +950,10 @@ sleep 40; kubectl -n 99-smoke get configmap smoke-config -o jsonpath='{.data.ori
 | 21 | **大镜像首拉慢，超时给足** | 实测新节点拉 `argocd` 镜像约 4 分钟；rollout `--timeout` 建议 600s |
 | 22 | **ApplicationSet 的 git generator 需要已登记仓库** | 与 Application 的凭据解析路径不同（实测），务必先 `configs.repositories` / `argocd repo add` |
 | 23 | **升级前备份 Application 定义** | `kubectl -n argocd get applications -o yaml > backup.yaml`；manifests 仓库本身即事实来源 |
+| 24 | ⚠️ **values 键名是 `repoServer` 不是 `repo`** | 写 `repo:` 会被静默忽略（模板用 `.Values.repoServer.resources`）；用 `helm show values \| grep '^repo'` 核对 |
+| 25 | ⚠️ **警惕 values 重复 YAML 键** | helm 静默取最后一个键：曾导致 `server.service` 丢失、NodePort 消失、UI 拒绝连接；改完用 `yaml.safe_load` + `helm template \| grep nodePort` 校验 |
+| 26 | ⚠️ **admin 密码轮换后必须删 initial Secret** | 只改密码不删 `argocd-initial-admin-secret` 等于留一个已知凭据；找回靠 patch `argocd-secret`（见 6.1） |
+| 27 | **组件加资源 limits** | 避免 noisy-neighbor/OOM；基线见 5.2（controller 1C/2G、repoServer 1C/1G、server 500m/512Mi、redis 200m/256Mi、applicationset 500m/256Mi） |
 
 ## 8. 排障
 
@@ -921,7 +992,20 @@ kubectl -n argocd logs deploy/argocd-repo-server --tail=50 | grep -i error
 
 确认 Application 的 `syncPolicy.automated.selfHeal: true`；手工 `kubectl edit` 改过的资源若不在 Git 声明中，`selfHeal` 会把它改回 Git 状态——**这是特性不是故障**，但开启前确认 Git 里的声明是完整的。
 
-### 8.5 升级 Argo CD 版本
+### 8.5 UI 能 ping 通但 NodePort 拒绝连接（`connection refused`）
+
+实测踩过：`helm upgrade` 后 `ss -ltnp | grep 30700` 无监听，而 Pod 正常、集群内 `curl 127.0.0.1:8080/healthz` 通。
+
+```bash
+kubectl -n argocd get svc argocd-server -o jsonpath='{.spec.type} {.spec.ports[*].nodePort}'; echo
+# 若 type 不是 NodePort 或无 nodePort → values 被覆盖（常见原因：重复 YAML 键，见第 7 章第 25 条）
+helm template argocd ./argo-cd -n argocd -f argocd-values.yaml | grep -c 'nodePort: 30700'
+python3 -c "import yaml; d=yaml.safe_load(open('argocd-values.yaml')); print(list(d['server']))"   # 应含 service
+```
+
+修复：把 resources 合并进已有的 `server:` 块（而不是新增一个 `server:`），重新 `helm upgrade`。
+
+### 8.6 升级 Argo CD 版本
 
 ```bash
 # 1) 备份 Application 定义
@@ -977,7 +1061,7 @@ kubectl delete ns argocd
 **已知遗留**
 
 - 本部署为 **HTTP 明文**（`server.insecure=true`），仅适用内网 lab；上生产前必须换 Ingress + TLS（第 7 章第 13 条）。
-- **未接 SSO**：仅 admin 本地账号；多人使用需开 dex + GitLab OAuth（第 7 章第 20 条）。初始 admin 密码仍在 `argocd-initial-admin-secret`，建议登录后改密。
+- **未接 SSO**：仅 admin 本地账号；多人使用需开 dex + GitLab OAuth（第 7 章第 20 条）。admin 密码已轮换，新密码在节点 `/root/argocd-deploy/.adminpass`（`argocd-initial-admin-secret` 已删除；找回方法见 6.1）。
 - **未配监控/告警**：Argo CD 暴露 `:8082`/`:8083` 指标，需要时接 Prometheus。
 - **Redis 无持久化**：重启后缓存重建，属预期。
 - **`99-smoke` 验证应用仍在集群**（命名空间 `99-smoke`，1 Pod）；确认不需要后可按 6.4 的方式从 `k8s-apps` 删除目录并同步。
@@ -1015,6 +1099,9 @@ kubectl delete ns argocd
 | 自动 sync | push 后 ≤120s 检测到并完成同步（replicas 1→2、ConfigMap 更新） |
 | 自愈 | `replicas` 手工改 3 → 45s 内回到 1；删除的 ConfigMap 40s 内重建 |
 | 凭据 | `configs.repositories` 声明式登记（Secret `argocd-repo-lan-gitlab-k8s-apps`）；引导 PAT 已撤销（204） |
+| 资源基线 | 5 个组件均已设 requests/limits（见 5.2）；`repoServer` 键名修正后生效 |
+| admin | 密码已轮换（bcrypt 写入 `argocd-secret`，新密码存 `/root/argocd-deploy/.adminpass`）；`argocd-initial-admin-secret` 已删除 |
+| 备份 | `/root/argocd-deploy/applications-backup.yaml`（Applications + ApplicationSets） |
 
 ## 附录 C：`ops/k8s-apps` 仓库模板
 

@@ -153,11 +153,22 @@ server:
     type: NodePort
     nodePortHttp: ${NODEPORT_HTTP}
     nodePortHttps: ${NODEPORT_HTTPS}
+  resources:                    # 最终部署基线（避免 noisy-neighbor / OOM）
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
 
 controller:
   replicas: 1
-repo:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 1, memory: 2Gi}
+
+# ⚠️ chart 的键名是 repoServer（不是 repo）；写 repo 会被静默忽略
+repoServer:
   replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 1, memory: 1Gi}
 
 dex:
   enabled: false                 # 暂不接 SSO（省一个 ghcr 镜像）
@@ -165,12 +176,18 @@ notifications:
   enabled: false
 applicationSet:
   enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
 
 redis:
   enabled: true
   image:
     repository: ${REDIS_IMAGE_REPO}   # chart 默认 ecr-public.aws.com，国内建议改 docker.m.daocloud.io
     tag: ${REDIS_IMAGE_TAG}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 256Mi}
 redis-ha:
   enabled: false                 # chart 默认即 false；显式声明，避免误开 HA 子 chart
 
@@ -201,6 +218,9 @@ grep -q 'kind: StatefulSet' /tmp/argocd-rendered.yaml \
   || die "渲染结果缺少 StatefulSet（application-controller）"
 grep -q 'server.insecure: "true"' /tmp/argocd-rendered.yaml \
   || die "渲染结果未启用 server.insecure（检查 configs.params 写法）"
+# ⚠️ 重复 YAML 键会被 helm 静默取最后一个（曾导致 server.service 丢失、NodePort 消失）
+grep -q "nodePort: ${NODEPORT_HTTP}" /tmp/argocd-rendered.yaml \
+  || die "渲染结果缺少 nodePort ${NODEPORT_HTTP}（检查 values 是否有重复键）"
 if grep -q 'dexidp/dex' /tmp/argocd-rendered.yaml; then
   die "dex 未成功禁用（渲染结果仍含 dexidp/dex 镜像）"
 fi
