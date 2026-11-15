@@ -23,7 +23,7 @@ ls "${PROJECT_DIR:-.}/promptfoo.yaml" 2>/dev/null || echo "NO_CONFIG"
 
 判定逻辑：
 
-- Node/npm 不可用 → 先按 [npm-linux.md](./npm-linux.md) 第 2 章安装 Node.js，再继续。
+- Node/npm 不可用 → 先按 [linux-npm.md](./linux-npm.md) 第 2 章安装 Node.js，再继续。
 - `promptfoo --version` 正常输出 → 跳过第 2 章。
 - 项目下已有 `promptfoo.yaml` → 跳过第 3 章初始化。
 

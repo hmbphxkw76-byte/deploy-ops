@@ -60,7 +60,7 @@ hostname; getent hosts $(hostname)
 判定逻辑：
 
 - `kubeadm`/`kubelet` 已安装且版本符合 → 跳过第 2 章；若已 `kubeadm init` 过（存在 `/etc/kubernetes/admin.conf`）→ 跳过第 5 章，只做第 7 章验证。
-- 无容器运行时 → 先按 `docker-linux.md` 安装 Docker（会自带 containerd），或单独安装 containerd。
+- 无容器运行时 → 先按 `linux-docker.md` 安装 Docker（会自带 containerd），或单独安装 containerd。
 - 当前用户无 sudo 权限 → 提示用户提供具备 sudo 权限的账户，不要继续。
 
 ## 2. 安装 kubelet / kubeadm / kubectl

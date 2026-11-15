@@ -3,7 +3,7 @@
 ## 文档说明
 
 本文档面向任意 AI IDE 或 AI Agent（如 Trae、Qoder、WorkBuddy 等），用于在 Kali Linux（及 Debian 系发行版）上自动安装配置 Docker CE 与 Compose 插件。
-Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；各步骤幂等，已完成的内容会自动跳过。镜像加速配置可参考 [docker-linux.md](docker-linux.md) 第 2.2 章。
+Agent 应按"前置检查 → 执行 → 验证"的模式逐步操作；各步骤幂等，已完成的内容会自动跳过。镜像加速配置可参考 [linux-docker.md](linux-docker.md) 第 2.2 章。
 
 ## 0. 参数区（执行前由用户确认或使用默认值）
 
@@ -92,7 +92,7 @@ docker run --rm hello-world
 判定：
 
 - 三条命令均正常输出 → 部署成功。
-- `hello-world` 拉取慢或失败 → 参考 [docker-linux.md](docker-linux.md) 第 2.2 章配置镜像加速后重试。
+- `hello-world` 拉取慢或失败 → 参考 [linux-docker.md](linux-docker.md) 第 2.2 章配置镜像加速后重试。
 - 服务启动失败 → `journalctl -u docker --no-pager -n 50` 查看日志。
 
 ## 5. Agent 执行注意事项
