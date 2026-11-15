@@ -547,7 +547,16 @@ PY
 kubectl -n argocd rollout restart deploy/argocd-server
 ```
 
-> **客户端信任**：把 `ca.crt` 导入操作系统/浏览器信任库（或 `cp ca.crt /usr/local/share/ca-certificates/lab-argocd-ca.crt && update-ca-certificates`）；未导入时浏览器会告警，CLI 可用 `--insecure` 跳过校验。
+> **客户端信任**：把 `ca.crt` 导入操作系统/浏览器信任库；未导入时浏览器会告警，CLI 可用 `--insecure` 跳过校验。
+>
+> - **Linux**：`sudo cp ca.crt /usr/local/share/ca-certificates/lab-argocd-ca.crt && sudo update-ca-certificates`（节点已做）。
+> - **Windows（实测）**：`curl`/PowerShell/Chrome/Edge 走 **Schannel**，只认 `LocalMachine\Root`，**需要管理员**执行一次：
+>   ```powershell
+>   certutil -addstore Root "D:\文档\GitHub\deploy-ops\certs\lab-argocd-ca.crt"
+>   ```
+>   非管理员可先 `certutil -user -addstore Root <ca.crt>`：**Python/OpenSSL 系工具会信任**（实测 `urllib` 直接 200），但 Schannel 系（curl/PowerShell/浏览器）仍会告警，只能用 `curl -k` 或点掉浏览器警告。
+> - **macOS**：双击 `ca.crt` 导入「钥匙串访问」并设为始终信任。
+> - **Firefox**：使用自带证书库，需在 设置 → 隐私与安全 → 证书 中导入。
 > **回退明文**：`configs.params.server.insecure: true`（键名注意是 `configs.params`）后 `helm upgrade`；此时 30700/30701 都会变成明文 HTTP。
 > 上生产：建议改为 Ingress + cert-manager（chart 的 `server.certificate` 已内置 Certificate 资源）或接入真实 CA。
 
