@@ -33,6 +33,8 @@
 | [kubernetes-argocd.md](kubernetes-argocd.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Argo CD（GitOps 持续交付，NodePort + 国内镜像源） |
 | [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → TLS → 验证，幂等） |
 | [kubernetes-ingress-cert-manager.md](kubernetes-ingress-cert-manager.md) | Kubernetes（Ubuntu） | 部署 ingress-nginx + cert-manager，用自建 CA 签证书（域名入口 + 自动签发） |
+| [kubernetes-cluster-health.md](kubernetes-cluster-health.md) | Kubernetes（Ubuntu） | 集群健康排查与自愈（凭据漂移 401 / 节点重启残留 / 组件 NotReady 的判别与修复） |
+| [kubernetes-cluster-audit.sh](kubernetes-cluster-audit.sh) | Kubernetes（Ubuntu） | 集群健康与凭据一致性只读审计（节点 / Pod / DaemonSet / Argo CD / 凭据同步） |
 | [windows-kubectl.md](windows-kubectl.md) | Windows | 安装 kubectl、取回并配置 kubeconfig 直连集群（含 PowerShell 踩坑与安全） |
 | [ingress/](ingress/) | Kubernetes（Ubuntu） | 上述部署的 values 与清单（ingress-nginx / cert-manager / ClusterIssuer / Argo CD Ingress / 验证脚本） |
 | [others-vscode-claude.md](others-vscode-claude.md) | Windows / Kali | VSCode + Claude Code 接入硅基流动（DeepSeek）的安装与配置 |
@@ -183,6 +185,16 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```
 
 预期行为：客户端与服务端 minor 版本对齐；`--kubeconfig` 变量加引号；凭据不入库、不外泄；危险操作先确认。
+
+### 集群健康排查与自愈（kubernetes-cluster-health.md）
+
+```text
+1. 体检：按 kubernetes-cluster-health.md 第 0 章跑 kubernetes-cluster-audit.sh（只读），再带 --secrets 查凭据一致性。
+2. 排障：Pod ImagePullBackOff / Argo CD Degraded，按第 3 章区分 401 与 404，定位凭据漂移并同步三份 harbor-creds。
+3. 排障：CreateContainerError / 系统 Pod NotReady，按第 4 章查 containerd 残留容器与 CNI 探针，删 Pod 由 DaemonSet 重建。
+```
+
+预期行为：先只读定位再动资源；凭据先溯源（core 日志 + admin update_time）后同步；不直接改 `harbor_user.password`；删 Pod / 重启 containerd 前先评估影响面；密码不写进仓库。
 
 ### Ollama（linux-ollama.md）
 
