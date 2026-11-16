@@ -8,6 +8,7 @@
   - `linux-*.md` — Linux / Unix 环境（默认 Ubuntu）
   - `kali-*.md` — Kali / Debian 环境
   - `kubernetes-*.md` — Kubernetes 环境
+  - `windows-*.md` — Windows 环境（PowerShell / git bash）
   - `others-*.md` — 跨平台 / 未归类（如 IDE 接入配置）
 - `.tmp-*` — 含密钥/临时值的文件，不提交仓库。
 
@@ -32,6 +33,7 @@
 | [kubernetes-argocd.md](kubernetes-argocd.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Argo CD（GitOps 持续交付，NodePort + 国内镜像源） |
 | [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → TLS → 验证，幂等） |
 | [kubernetes-ingress-cert-manager.md](kubernetes-ingress-cert-manager.md) | Kubernetes（Ubuntu） | 部署 ingress-nginx + cert-manager，用自建 CA 签证书（域名入口 + 自动签发） |
+| [windows-kubectl.md](windows-kubectl.md) | Windows | 安装 kubectl、取回并配置 kubeconfig 直连集群（含 PowerShell 踩坑与安全） |
 | [ingress/](ingress/) | Kubernetes（Ubuntu） | 上述部署的 values 与清单（ingress-nginx / cert-manager / ClusterIssuer / Argo CD Ingress / 验证脚本） |
 | [others-vscode-claude.md](others-vscode-claude.md) | Windows / Kali | VSCode + Claude Code 接入硅基流动（DeepSeek）的安装与配置 |
 
@@ -170,6 +172,17 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```
 
 预期行为：quay.io / registry.k8s.io 镜像走 containerd 镜像源；只用稳定版（拒装 rc/beta）；CI 只改 manifests、由 Argo CD 负责 sync；凭据只进 Secret / 本地 values，不写仓库。
+
+### Windows kubectl 直连集群（windows-kubectl.md）
+
+```text
+1. 安装：按 windows-kubectl.md 第 2 章用 winget 安装 kubectl 1.37.2（与服务端对齐）。
+2. 配置：按第 3 章从 192.168.40.189 取回 admin.conf 到 .kube/config，并设 KUBECONFIG 环境变量。
+3. 验证：按第 4 章跑一键验证脚本，确认三节点 Ready、auth can-i 返回 yes。
+4. 排障：连不上 / 证书报错 / PowerShell 传参不生效，按第 8 章与第 6 章定位。
+```
+
+预期行为：客户端与服务端 minor 版本对齐；`--kubeconfig` 变量加引号；凭据不入库、不外泄；危险操作先确认。
 
 ### Ollama（linux-ollama.md）
 

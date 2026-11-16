@@ -35,6 +35,9 @@ JUNK_DIRS=( '__pycache__' '.pytest_cache' '.mypy_cache' '.ruff_cache' '.tox' '.e
             'node_modules' '.venv' 'venv' 'dist' 'build' 'out' 'target' 'coverage'
             'htmlcov' '.cache' '.npm' '.yarn' '.pnpm-store' '.gradle' '.terraform' )
 
+# 本地保留（被 .gitignore 忽略但需长期保留，不参与残留清理，如本机 kubeconfig）
+KEEP_IGNORED=( '.kube' )
+
 # 全局工具缓存（仅 --post / --cache 清理；逐项确认存在才删）
 GLOBAL_CACHE=( "$HOME/.cache/helm" "$HOME/.cache/pip" "$HOME/.npm" "$HOME/.local/share/helm"
                "$HOME/.kube/cache" "$HOME/.cache/ms-playwright" "$HOME/.cache/puppeteer" )
@@ -83,9 +86,21 @@ clean_dirs() {
 clean_ignored() {
   local out; out="$(git clean -Xdn)"
   [ -n "$out" ] || { [ "$VERBOSE" = 1 ] && log "无被忽略的残留"; return 0; }
-  log "清理被忽略的临时/缓存残留（git clean -Xdf）"
+  log "清理被忽略的临时/缓存残留"
   [ "$VERBOSE" = 1 ] && printf '%s\n' "$out"
-  git clean -Xdf
+  printf '%s\n' "$out" | sed 's/^Would remove //' | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    local keep=0 k
+    for k in "${KEEP_IGNORED[@]}"; do
+      if [ "$p" = "$k" ] || [ "$p" = "$k/" ]; then keep=1; fi
+    done
+    if [ "$keep" = 1 ]; then
+      [ "$VERBOSE" = 1 ] && log "保留本地目录: $p"
+      continue
+    fi
+    [ "$VERBOSE" = 1 ] && log "删除: $p"
+    rm -rf -- "$p"
+  done
 }
 
 clean_global_cache() {
@@ -100,11 +115,18 @@ clean_global_cache() {
 }
 
 residue() {
-  local out=""
+  local out="" p k keep
   out+="$(find_junk_files)"$'\n'
   out+="$(find_junk_dirs)"$'\n'
   out+="$(git clean -Xdn)"
-  printf '%s' "$out" | sed '/^$/d'
+  printf '%s\n' "$out" | sed '/^$/d' | while IFS= read -r p; do
+    keep=0
+    for k in "${KEEP_IGNORED[@]}"; do
+      case "$p" in "$k"|"$k/"|"Would remove $k"|"Would remove $k/") keep=1;; esac
+    done
+    if [ "$keep" = 1 ]; then continue; fi
+    printf '%s\n' "$p"
+  done
 }
 
 check() {
