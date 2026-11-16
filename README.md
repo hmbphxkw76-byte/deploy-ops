@@ -35,6 +35,26 @@
 | [ingress/](ingress/) | Kubernetes（Ubuntu） | 上述部署的 values 与清单（ingress-nginx / cert-manager / ClusterIssuer / Argo CD Ingress / 验证脚本） |
 | [others-vscode-claude.md](others-vscode-claude.md) | Windows / Kali | VSCode + Claude Code 接入硅基流动（DeepSeek）的安装与配置 |
 
+## 仓库维护与 CI 清理
+
+仓库配套两个幂等维护脚本与一条 GitHub Actions 清理流水线，保证流水线运行期与运行结束后工作区、缓存、临时资源无残留。
+
+| 脚本 / 流水线 | 作用 |
+| --- | --- |
+| [`scripts/cleanup.sh`](scripts/cleanup.sh) | 标准化清理：临时文件 / 构建产物 / 依赖缓存 / 全局工具缓存；已跟踪文件一律跳过 |
+| [`scripts/validate.sh`](scripts/validate.sh) | 仓库健康校验：Shell 语法、内嵌脚本一致性、死链、孤儿文件、敏感信息、残留扫描 |
+| [`.github/workflows/cleanup.yml`](.github/workflows/cleanup.yml) | 清理流水线，三阶段串行 |
+
+`cleanup.sh` 模式：`--check`（只读门禁）、`--pre`（前置清理）、`--post`（收尾清理 + 全局缓存 + 校验）、`--all`、`--cache`。
+
+| 阶段 | 内容 | 触发时机 |
+| --- | --- | --- |
+| 1/3 前置清理 | `cleanup.sh --pre`：清临时 / 构建 / 缓存 | 每次运行开始 |
+| 2/3 仓库校验 | `validate.sh`（含残留扫描） | 前置清理通过后 |
+| 3/3 收尾清理 | `cleanup.sh --post` + `git status --porcelain` 必须为空 | 校验通过后 |
+
+自动触发规则：`push` 到 `main`、`pull_request`、手动 `workflow_dispatch`、每周日 02:17 UTC 定时。
+
 ## 通用提问模板
 
 按目的选择一种问法，Agent 会自动读取手册并执行：

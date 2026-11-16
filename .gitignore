@@ -1,3 +1,45 @@
-# 临时/本地文件（不入库）
+# 临时 / 本地文件（不入库）
 .tmp-*.yaml
 .tmp/
+*.tmp
+*.temp
+*.log
+*.bak
+*.orig
+*.rej
+*.old
+*.save
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 构建产物
+dist/
+build/
+out/
+target/
+coverage/
+htmlcov/
+*.pyc
+*.pyo
+
+# 依赖 / 工具缓存
+node_modules/
+.venv/
+venv/
+.cache/
+.npm/
+.yarn/
+.pnpm-store/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.eggs/
+*.egg-info/
+.gradle/
+.terraform/
