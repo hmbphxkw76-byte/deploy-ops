@@ -26,6 +26,7 @@
 | [kubernetes-harbor.md](kubernetes-harbor.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Harbor 私有镜像仓库（NodePort / 自签 HTTPS / 国内镜像源） |
 | [kubernetes-harbor-install.sh](kubernetes-harbor-install.sh) | Kubernetes（Ubuntu） | Harbor 一键安装脚本（前置检查 → 渲染校验 → 安装/升级 → 导出 CA → 验证，幂等） |
 | [kubernetes-gitlab.md](kubernetes-gitlab.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署极狐 GitLab（外置 PostgreSQL / Redis / MinIO，国内镜像源） |
+| [kubernetes-gitlab-runner.md](kubernetes-gitlab-runner.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 GitLab Runner（kubernetes 执行器，3 副本，标签路由，国内镜像源） |
 | [linux-gitlab.md](linux-gitlab.md) | Linux（Ubuntu） | 独立 Docker 部署 GitLab CE（不接入 K8s，国内镜像源） |
 | [kubernetes-argocd.md](kubernetes-argocd.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Argo CD（GitOps 持续交付，NodePort + 国内镜像源） |
 | [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → TLS → 验证，幂等） |
@@ -124,6 +125,16 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 ```
 
 预期行为：镜像走国内源（docker.m.daocloud.io），不得直连 Docker Hub；端口避开 80/22 与 K8s 端口；不创建任何 K8s 资源；默认关闭公开注册；升级 `:latest` 前备份 `/opt/gitlab`。
+
+### GitLab Runner on K8s（kubernetes-gitlab-runner.md）
+
+```text
+1. 部署：按 kubernetes-gitlab-runner.md 在 K8s 上部署 GitLab Runner（3 副本，标签 k8s），执行前向我确认参数区参数。
+2. 验证：按第 4 章核对 3/3 Pod、GitLab 侧 online + 3 managers，并跑通带 k8s 标签的冒烟作业。
+3. 排障：job 一直 Pending / 镜像拉取超时，按第 5 章定位（helper 镜像、镜像源顺序、节点 kubelet）。
+```
+
+预期行为：只接带 `k8s` 标签的作业（`run_untagged=false`），不抢既有 runner 的无标签作业；镜像与 helper 走国内源；重启 containerd、强制删 Pod、重跑他人流水线前先确认。
 
 ### Harbor（kubernetes-harbor.md）
 
