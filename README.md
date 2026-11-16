@@ -23,6 +23,7 @@
 | [linux-npm.md](linux-npm.md) | Linux（Ubuntu） | Node.js（nvm）安装、npm 镜像配置与排障 |
 | [linux-promptfoo.md](linux-promptfoo.md) | Linux（Ubuntu） | Promptfoo 安装与红队测试 |
 | [linux-kubernetes.md](linux-kubernetes.md) | Linux（Ubuntu） | 单节点 Kubernetes（kubeadm + containerd + flannel）部署、验证与排障 |
+| [linux-provisioning-playbook.md](linux-provisioning-playbook.md) | Linux（Ubuntu） | 跨组件实操要点、镜像源实测数据与共性踩坑速查（被各手册引用） |
 | [kubernetes-harbor.md](kubernetes-harbor.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署 Harbor 私有镜像仓库（NodePort / 自签 HTTPS / 国内镜像源） |
 | [kubernetes-harbor-install.sh](kubernetes-harbor-install.sh) | Kubernetes（Ubuntu） | Harbor 一键安装脚本（前置检查 → 渲染校验 → 安装/升级 → 导出 CA → 验证，幂等） |
 | [kubernetes-gitlab.md](kubernetes-gitlab.md) | Kubernetes（Ubuntu） | 在 K8s 上用 Helm 部署极狐 GitLab（外置 PostgreSQL / Redis / MinIO，国内镜像源） |
@@ -32,15 +33,7 @@
 | [kubernetes-argocd-install.sh](kubernetes-argocd-install.sh) | Kubernetes（Ubuntu） | Argo CD 一键安装脚本（镜像源 → 渲染校验 → 安装/升级 → TLS → 验证，幂等） |
 | [kubernetes-ingress-cert-manager.md](kubernetes-ingress-cert-manager.md) | Kubernetes（Ubuntu） | 部署 ingress-nginx + cert-manager，用自建 CA 签证书（域名入口 + 自动签发） |
 | [ingress/](ingress/) | Kubernetes（Ubuntu） | 上述部署的 values 与清单（ingress-nginx / cert-manager / ClusterIssuer / Argo CD Ingress / 验证脚本） |
-
-## 选型与决策记录
-
-| 文档 | 说明 |
-| --- | --- |
-| [docs/osai-ai300-skill-coverage-decision.md](docs/osai-ai300-skill-coverage-decision.md) | OSAI（AI-300）考前靶机与工具精选、场景覆盖矩阵 |
-| [docs/OSAI-Exam-Report.pdf](docs/OSAI-Exam-Report.pdf) | OSAI 考试报告 |
-
-> 注：`docs/` 目录当前不在本仓库工作区，上表链接待文件就位后生效。
+| [others-vscode-claude.md](others-vscode-claude.md) | Windows / Kali | VSCode + Claude Code 接入硅基流动（DeepSeek）的安装与配置 |
 
 ## 通用提问模板
 

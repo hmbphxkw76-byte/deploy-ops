@@ -2,7 +2,7 @@
 # Harbor on Kubernetes 一键安装（NodePort + 自签 HTTPS + 国内镜像源）
 # 用法:
 #   NODE_IP=192.168.40.189 PIN_NODE=ubuntu bash kubernetes-harbor-install.sh
-#   HARBOR_VERSION=v2.15.4 TRIVY_ENABLED=true bash kubernetes-harbor-install.sh
+#   HARBOR_VERSION=v2.15.5 TRIVY_ENABLED=true bash kubernetes-harbor-install.sh
 #   ADMIN_PASSWORD='固定密码' SECRET_KEY='固定密钥' bash kubernetes-harbor-install.sh   # 不传则随机生成
 #   VALUES_FILE=/root/harbor-values.yaml bash kubernetes-harbor-install.sh
 # 说明: 幂等。已安装则走 helm upgrade；脚本末尾打印访问地址 / 账号 / 密码 / CA 路径。
