@@ -226,7 +226,7 @@ echo "=== 结果: $P 通过, $F 失败 ==="
 | 4 | **自建 CA 做 `ca` 类型 ClusterIssuer** | 内网无 ACME/公网域名时最省事；客户端信任一次 CA 即可 |
 | 5 | **CA Secret 放 cert-manager 命名空间** | `ca` Issuer 只从自身命名空间读取 `secretName` |
 | 6 | **回源用 `backend-protocol: HTTPS`** | Argo CD server 自身已启用 TLS；用 HTTP 回源会 502/握手失败 |
-| 7 | **别把 CA 私钥提交仓库** | `ca.crt` 可入库（[certs/lab-argocd-ca.crt](certs/lab-argocd-ca.crt)），`ca.key` 只留节点 |
+| 7 | **别把 CA 私钥提交仓库** | `ca.crt` 可公开但**不再入库**（原 `certs/lab-argocd-ca.crt` 已移除，仅存节点 `/root/argocd-deploy/tls/ca.crt`），`ca.key` 只留节点 |
 | 8 | **证书域名写进 SAN** | `argocd.lan` 必须在 SAN 中，否则浏览器/curl 报 hostname 不匹配 |
 | 9 | **客户端信任** | Linux `update-ca-certificates`；Windows 需管理员 `certutil -addstore Root`（详见 Argo CD 手册 3.3） |
 | 10 | **CLI 与 UI 分开** | UI 走域名 443；Argo CD CLI（gRPC）继续走 NodePort 30701，避免为 gRPC 单独配 Ingress |
@@ -307,6 +307,6 @@ ingress/
 ├── cert-manager-values.yaml      # cert-manager values
 ├── clusterissuer-lab-ca.yaml     # CA 类型 ClusterIssuer
 └── argocd-ingress.yaml           # Argo CD 域名入口 + cert-manager 注解
-certs/lab-argocd-ca.crt           # 自建 CA 证书（公开，可入库）
+/root/argocd-deploy/tls/ca.crt     # 自建 CA 证书（客户端导入用，仅存节点，未入库）
 /root/argocd-deploy/tls/ca.key     # CA 私钥（仅节点本地，勿提交）
 ```

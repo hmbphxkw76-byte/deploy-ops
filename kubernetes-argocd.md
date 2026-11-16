@@ -550,9 +550,10 @@ kubectl -n argocd rollout restart deploy/argocd-server
 > **客户端信任**：把 `ca.crt` 导入操作系统/浏览器信任库；未导入时浏览器会告警，CLI 可用 `--insecure` 跳过校验。
 >
 > - **Linux**：`sudo cp ca.crt /usr/local/share/ca-certificates/lab-argocd-ca.crt && sudo update-ca-certificates`（节点已做）。
-> - **Windows（实测）**：`curl`/PowerShell/Chrome/Edge 走 **Schannel**，只认 `LocalMachine\Root`，**需要管理员**执行一次：
+> - **Windows（实测）**：`curl`/PowerShell/Chrome/Edge 走 **Schannel**，只认 `LocalMachine\Root`，**需要管理员**执行一次。CA 证书在节点 `/root/argocd-deploy/tls/ca.crt`，先取到本地再导入：
 >   ```powershell
->   certutil -addstore Root "D:\文档\GitHub\deploy-ops\certs\lab-argocd-ca.crt"
+>   scp root@192.168.40.189:/root/argocd-deploy/tls/ca.crt $env:USERPROFILE\ca.crt
+>   certutil -addstore Root $env:USERPROFILE\ca.crt
 >   ```
 >   非管理员可先 `certutil -user -addstore Root <ca.crt>`：**Python/OpenSSL 系工具会信任**（实测 `urllib` 直接 200），但 Schannel 系（curl/PowerShell/浏览器）仍会告警，只能用 `curl -k` 或点掉浏览器警告。
 > - **macOS**：双击 `ca.crt` 导入「钥匙串访问」并设为始终信任。
