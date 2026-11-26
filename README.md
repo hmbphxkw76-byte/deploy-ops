@@ -10,6 +10,8 @@
   - `kubernetes-*.md` — Kubernetes 环境
   - `windows-*.md` — Windows 环境（PowerShell / git bash）
   - `others-*.md` — 跨平台 / 未归类（如 IDE 接入配置）
+  - `labs/` — 安全实验环境手册集（漏洞靶场 / MCP / A2A / K8s 攻击场景等），编号成体系；单篇亦可独立执行
+  - `agent-rules/` — Agent 交互规则：[global-interaction-rule.md](agent-rules/global-interaction-rule.md) 为规范源；[enhance-prompt/](agent-rules/enhance-prompt/) 为跨 IDE 部署包（同内容副本 + `bootstrap.sh` / `bootstrap.ps1`，从规范库同步到本机 `~/.agent-rules`）
 - `.tmp-*` — 含密钥/临时值的文件，不提交仓库。
 
 ## 手册目录
@@ -38,6 +40,23 @@
 | [windows-kubectl.md](windows-kubectl.md) | Windows | 安装 kubectl、取回并配置 kubeconfig 直连集群（含 PowerShell 踩坑与安全） |
 | [ingress/](ingress/) | Kubernetes（Ubuntu） | 上述部署的 values 与清单（ingress-nginx / cert-manager / ClusterIssuer / Argo CD Ingress / 验证脚本） |
 | [others-vscode-claude.md](others-vscode-claude.md) | Windows / Kali | VSCode + Claude Code 接入硅基流动（DeepSeek）的安装与配置 |
+
+### 实验环境手册（labs/）
+
+安全实验环境部署（源自 2026-11-17-Labs 实验包落地经验，v2.0），与具体 IP / 主机解耦，适用于任意 Ubuntu 主机；索引见 [labs/README.md](labs/README.md)：
+
+| 手册 | 组件 | 用途 |
+| --- | --- | --- |
+| [labs/00-prerequisites.md](labs/00-prerequisites.md) | 通用前置 | Docker / 镜像源 / 目录规范（**先读**） |
+| [labs/01-vulhub.md](labs/01-vulhub.md) | vulhub | 334 个 Web 漏洞场景（Docker Compose） |
+| [labs/02-dvmcp.md](labs/02-dvmcp.md) | damn-vulnerable-MCP-server | MCP 挑战平台（Docker） |
+| [labs/03-dvar-agentic-rag.md](labs/03-dvar-agentic-rag.md) | DVAR | Agentic RAG（含 LLM / 嵌入接入） |
+| [labs/04-mcp-servers-lab.md](labs/04-mcp-servers-lab.md) | vulnerable-mcp-servers-lab | 9 个漏洞 MCP 服务器（Node / Python） |
+| [labs/05-a2a-helloworld.md](labs/05-a2a-helloworld.md) | a2a-samples Helloworld | A2A 协议入门 Agent |
+| [labs/06-a2asecbench.md](labs/06-a2asecbench.md) | A2ASecBench | Agent 安全基准（离线 / 在线） |
+| [labs/07-kubernetes-goat.md](labs/07-kubernetes-goat.md) | kubernetes-goat | K8s 攻击场景集（独立 k3d 集群） |
+| [labs/08-ml-toolchain.md](labs/08-ml-toolchain.md) | vec2text / embedding-inversion | 机器学习演示工具链 |
+| [labs/99-troubleshooting.md](labs/99-troubleshooting.md) | 排障与运维 | 现象→原因→解法、清理、速查 |
 
 ## 仓库维护与 CI 清理
 
@@ -203,6 +222,17 @@ OLLAMA_ORIGINS 收紧为 https://myapp.example.com。
 2. 收紧配置：把 OLLAMA_ORIGINS 从 * 改为 https://myapp.example.com 并重启服务。
 3. 排障：ollama 服务起不来，按 linux-ollama.md 第 5 章查日志定位（先确认 ollama 用户是否存在）。
 ```
+
+### 安全实验环境（labs/）
+
+```text
+在新 Ubuntu 服务器上按顺序执行：
+1. labs/00-prerequisites.md —— 完成 Docker、镜像源、目录规范与端口检查
+2. labs/01-vulhub.md —— 选一个场景启动并验证，用完 down
+3. labs/07-kubernetes-goat.md —— 建独立 k3d 集群部署攻击场景
+```
+
+预期行为：上游源码零改动（定制发生在 `$LAB_ROOT/build`、`$LAB_ROOT/run` 副本）；被拦镜像走 `docker.1ms.run` 重打标签；端口冲突改自己映射并在 labs/README.md 端口规划总表登记；构建期 apt / pip / npm 不走宿主机加速时按各手册注入国内源。
 
 ## 组合工作流示例
 
